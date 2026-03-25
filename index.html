@@ -75,6 +75,32 @@
             text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;
         }
 
+        /* ── Observation date filter ── */
+        .obs-filter {
+            margin: 4px 0 2px 22px;
+        }
+        .obs-filter.hidden { display: none; }
+        .obs-filter-presets {
+            display: flex; gap: 0; border-radius: 6px; overflow: hidden;
+            border: 1px solid #ddd;
+        }
+        .obs-filter-btn {
+            padding: 3px 9px; border: none; background: #f5f5f5;
+            font-size: 11px; font-weight: 500; cursor: pointer; color: #555;
+            border-right: 1px solid #ddd; transition: all 0.15s;
+        }
+        .obs-filter-btn:last-child { border-right: none; }
+        .obs-filter-btn.active { background: #2563eb; color: #fff; }
+        .obs-filter-btn:hover:not(.active) { background: #e8e8e8; }
+        .obs-filter-custom {
+            display: flex; align-items: center; gap: 4px;
+            margin-top: 4px; font-size: 11px; color: #666;
+        }
+        .obs-filter-custom input[type="date"] {
+            font-size: 11px; padding: 2px 4px; border: 1px solid #ccc;
+            border-radius: 4px; color: #333; width: 110px;
+        }
+
         /* ── Map type buttons ── */
         .map-type-control {
             position: absolute; top: 12px; left: 60px; z-index: 1000;
@@ -283,6 +309,20 @@
         <div class="layer-section-title">Avalanche</div>
         <label><input type="checkbox" id="toggle-avy-zones" checked> Avalanche Forecasts</label>
         <label><input type="checkbox" id="toggle-avy-obs" checked> Observations</label>
+        <div class="obs-filter" id="obs-filter">
+            <div class="obs-filter-presets">
+                <button class="obs-filter-btn" data-range="7">Week</button>
+                <button class="obs-filter-btn active" data-range="30">Month</button>
+                <button class="obs-filter-btn" data-range="season">Season</button>
+                <button class="obs-filter-btn" data-range="custom">Custom</button>
+            </div>
+            <div class="obs-filter-custom" id="obs-filter-custom" style="display:none">
+                <input type="date" id="obs-date-from">
+                <span>to</span>
+                <input type="date" id="obs-date-to">
+                <button id="obs-apply-custom" class="obs-filter-btn active" style="margin-left:2px">Go</button>
+            </div>
+        </div>
 
         <div class="layer-section">
             <div class="layer-section-title">Weather</div>
@@ -456,7 +496,46 @@ document.getElementById('toggle-avy-zones').addEventListener('change', function(
 });
 document.getElementById('toggle-avy-obs').addEventListener('change', function() {
     this.checked ? map.addLayer(layers.avyObs) : map.removeLayer(layers.avyObs);
+    const filterEl = document.getElementById('obs-filter');
+    if (filterEl) this.checked ? filterEl.classList.remove('hidden') : filterEl.classList.add('hidden');
 });
+
+// Observation date filter handlers
+(function() {
+    const presetBtns = document.querySelectorAll('.obs-filter-btn[data-range]');
+    const customRow = document.getElementById('obs-filter-custom');
+    const fromInput = document.getElementById('obs-date-from');
+    const toInput = document.getElementById('obs-date-to');
+
+    // Set default date values
+    const today = new Date();
+    const thirtyAgo = new Date();
+    thirtyAgo.setDate(today.getDate() - 30);
+    toInput.value = today.toISOString().slice(0, 10);
+    fromInput.value = thirtyAgo.toISOString().slice(0, 10);
+
+    presetBtns.forEach(btn => {
+        btn.addEventListener('click', function() {
+            presetBtns.forEach(b => b.classList.remove('active'));
+            this.classList.add('active');
+            const range = this.dataset.range;
+            obsFilterRange = range;
+
+            if (range === 'custom') {
+                customRow.style.display = 'flex';
+            } else {
+                customRow.style.display = 'none';
+                loadAvyObservations();
+            }
+        });
+    });
+
+    document.getElementById('obs-apply-custom').addEventListener('click', function() {
+        obsFilterRange = 'custom';
+        loadAvyObservations();
+    });
+})();
+
 document.getElementById('toggle-snotel').addEventListener('change', function() {
     this.checked ? map.addLayer(layers.snotel) : map.removeLayer(layers.snotel);
 });
@@ -958,7 +1037,32 @@ function loadCoCoRaHSStations() {
 // ============================================================
 // 5. AVALANCHE OBSERVATIONS (from Parse)
 // ============================================================
-async function loadAvyObservations() {
+let obsFilterRange = '30'; // current active filter range
+
+function getSeasonStart() {
+    const now = new Date();
+    const year = now.getMonth() >= 9 ? now.getFullYear() : now.getFullYear() - 1;
+    return new Date(year, 9, 1); // Oct 1
+}
+
+function getObsDateRange() {
+    if (obsFilterRange === 'season') {
+        return { start: getSeasonStart(), end: null };
+    } else if (obsFilterRange === 'custom') {
+        const fromEl = document.getElementById('obs-date-from');
+        const toEl = document.getElementById('obs-date-to');
+        const start = fromEl.value ? new Date(fromEl.value + 'T00:00:00') : null;
+        const end = toEl.value ? new Date(toEl.value + 'T23:59:59') : null;
+        return { start, end };
+    } else {
+        const days = parseInt(obsFilterRange) || 30;
+        const start = new Date();
+        start.setDate(start.getDate() - days);
+        return { start, end: null };
+    }
+}
+
+async function loadAvyObservations(startDate, endDate) {
     setStatus('Loading avalanche observations...');
     try {
         const PFAvyObs = Parse.Object.extend('PFAvalancheCenterObservation');
@@ -966,11 +1070,15 @@ async function loadAvyObservations() {
         query.limit(5000);
         query.exists('geoPoint');
         query.include('observationPhotos');
-        // Only get observations from the last 30 days
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-        query.greaterThan('observationDate', thirtyDaysAgo);
+
+        // Use provided dates or fall back to current filter state
+        const range = (startDate !== undefined) ? { start: startDate, end: endDate || null } : getObsDateRange();
+        if (range.start) query.greaterThan('observationDate', range.start);
+        if (range.end) query.lessThanOrEqualTo('observationDate', range.end);
         query.descending('observationDate');
+
+        // Clear existing observation markers before loading
+        layers.avyObs.clearLayers();
 
         const results = await query.find();
         let count = 0;
