@@ -1099,13 +1099,17 @@ async function loadAvyObservations(startDate, endDate) {
             // Get first photo thumbnail URL if available
             const photos = obs.get('observationPhotos') || [];
             let thumbUrl = '';
+            let fullUrl = '';
             if (photos.length > 0) {
                 const firstPhoto = photos[0];
                 if (firstPhoto && firstPhoto.get) {
-                    const thumbFile = firstPhoto.get('thumbnail');
-                    const photoFile = firstPhoto.get('photo');
-                    if (thumbFile && thumbFile.url) thumbUrl = thumbFile.url();
-                    else if (photoFile && photoFile.url) thumbUrl = photoFile.url();
+                    thumbUrl = firstPhoto.get('thumbnailURL') || '';
+                    fullUrl = firstPhoto.get('fullURL') || '';
+                    if (!thumbUrl) thumbUrl = fullUrl;
+                } else if (firstPhoto) {
+                    // Fallback for plain objects (REST API response)
+                    thumbUrl = firstPhoto.thumbnailURL || firstPhoto.fullURL || '';
+                    fullUrl = firstPhoto.fullURL || thumbUrl;
                 }
             }
 
@@ -1114,7 +1118,7 @@ async function loadAvyObservations(startDate, endDate) {
             const truncatedDesc = desc.length > 300 ? desc.substring(0, 300) + '...' : desc;
 
             const photoHtml = thumbUrl
-                ? `<div style="margin:6px 0"><img src="${thumbUrl}" style="max-width:100%;max-height:150px;border-radius:6px;object-fit:cover;cursor:pointer" onclick="window.open('${thumbUrl}','_blank')" alt="Observation photo"></div>`
+                ? `<div style="margin:6px 0"><img src="${thumbUrl}" style="max-width:100%;max-height:150px;border-radius:6px;object-fit:cover;cursor:pointer" onclick="window.open('${fullUrl || thumbUrl}','_blank')" alt="Observation photo"></div>`
                 : '';
 
             marker.bindPopup(`
