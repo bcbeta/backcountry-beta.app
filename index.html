@@ -457,7 +457,7 @@
 </div>
 
 <!-- Version label -->
-<div id="version-label">v0.9</div>
+<div id="version-label">v0.9.1</div>
 
 <!-- Status bar -->
 <div id="status-bar">Ready</div>
@@ -696,8 +696,9 @@ function findDailyExtremes(series) {
     return Object.values(dayMap);
 }
 
-// Shared X-axis config: dates at midnight always shown, time ticks as space allows
-// Date labels rendered on a second line below time labels to avoid crowding
+// Shared X-axis config: dates at midnight always shown, time ticks uniform
+// Strategy: pick ONE consistent interval (6h, 12h, or 24h) based on chart width,
+// then apply it uniformly. Midnight date labels always shown on a second line.
 function makeXAxisConfig() {
     return {
         type: 'time',
@@ -709,35 +710,46 @@ function makeXAxisConfig() {
         },
         afterBuildTicks(axis) {
             if (!axis.ticks || axis.ticks.length === 0) return;
-            // Always keep midnight + 6h-interval ticks, thin only if truly overflowing
-            const kept = [];
+
+            // Dedupe and collect only 6-hour aligned ticks
             const seen = new Set();
+            const all6h = [];
             axis.ticks.forEach(t => {
                 const d = new Date(t.value);
                 const h = d.getHours();
-                // Always keep midnight and 6-hour marks
-                if (h === 0 || h === 6 || h === 12 || h === 18) {
+                if (h % 6 === 0) {
                     const key = d.getTime();
-                    if (!seen.has(key)) { seen.add(key); kept.push(t); }
+                    if (!seen.has(key)) { seen.add(key); all6h.push(t); }
                 }
             });
-            // If chart is very narrow, thin out non-midnight ticks
+
+            // Count midnights to know the baseline
+            const midnights = all6h.filter(t => new Date(t.value).getHours() === 0);
             const chartWidth = axis.chart?.width || 400;
-            const maxTicks = Math.floor(chartWidth / 32);
-            if (kept.length > maxTicks) {
-                const midnights = kept.filter(t => new Date(t.value).getHours() === 0);
-                const others = kept.filter(t => new Date(t.value).getHours() !== 0);
-                // Keep 12h ticks first, then 6h/18h
-                const noon = others.filter(t => new Date(t.value).getHours() === 12);
-                const sixish = others.filter(t => { const h = new Date(t.value).getHours(); return h === 6 || h === 18; });
-                const remaining = maxTicks - midnights.length;
-                let extra = noon;
-                if (extra.length < remaining) extra = extra.concat(sixish.slice(0, remaining - extra.length));
-                else extra = extra.slice(0, remaining);
-                axis.ticks = [...midnights, ...extra].sort((a, b) => a.value - b.value);
+            const pxPerTick = 36;
+            const maxTicks = Math.floor(chartWidth / pxPerTick);
+
+            // Choose the best uniform interval that fits
+            // Try 6h first (4 ticks/day), then 12h (2 ticks/day), then 24h (midnights only)
+            let result;
+            if (all6h.length <= maxTicks) {
+                // All 6-hour ticks fit — show them all
+                result = all6h;
             } else {
-                axis.ticks = kept.sort((a, b) => a.value - b.value);
+                // Try 12h: midnight + noon
+                const every12h = all6h.filter(t => {
+                    const h = new Date(t.value).getHours();
+                    return h === 0 || h === 12;
+                });
+                if (every12h.length <= maxTicks) {
+                    result = every12h;
+                } else {
+                    // Midnights only
+                    result = midnights;
+                }
             }
+
+            axis.ticks = result.sort((a, b) => a.value - b.value);
         },
         grid: {
             color: ctx => {
@@ -764,13 +776,11 @@ function makeXAxisConfig() {
                 const d = new Date(value);
                 const hour = d.getHours();
                 if (hour === 0) {
-                    // Return array: second line is the date, first line is empty to offset it below
+                    // Date on second line, below time ticks
                     return ['', d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })];
                 }
-                if (hour === 6 || hour === 12 || hour === 18) {
-                    return d.toLocaleTimeString('en-US', { hour: 'numeric' });
-                }
-                return null;
+                // Time ticks (6am, 12pm, 6pm)
+                return d.toLocaleTimeString('en-US', { hour: 'numeric' });
             }
         }
     };
