@@ -457,7 +457,7 @@
 </div>
 
 <!-- Version label -->
-<div id="version-label">v0.9.1</div>
+<div id="version-label">v0.9.2</div>
 
 <!-- Status bar -->
 <div id="status-bar">Ready</div>
@@ -723,33 +723,33 @@ function makeXAxisConfig() {
                 }
             });
 
-            // Count midnights to know the baseline
+            // Midnights are ALWAYS kept — they render on a separate line and
+            // don't compete for horizontal space with time ticks.
             const midnights = all6h.filter(t => new Date(t.value).getHours() === 0);
-            const chartWidth = axis.chart?.width || 400;
-            const pxPerTick = 36;
-            const maxTicks = Math.floor(chartWidth / pxPerTick);
+            const timeTicks6h = all6h.filter(t => new Date(t.value).getHours() !== 0);
 
-            // Choose the best uniform interval that fits
-            // Try 6h first (4 ticks/day), then 12h (2 ticks/day), then 24h (midnights only)
-            let result;
-            if (all6h.length <= maxTicks) {
-                // All 6-hour ticks fit — show them all
-                result = all6h;
+            // Budget: how many TIME ticks (non-midnight) can fit?
+            const chartWidth = axis.chart?.width || 400;
+            const pxPerTimeTick = 36;
+            const maxTimeTicks = Math.floor(chartWidth / pxPerTimeTick);
+
+            // Choose uniform time tick interval: 6h (3/day), 12h (1/day noon), or none
+            let keptTimeTicks;
+            if (timeTicks6h.length <= maxTimeTicks) {
+                // All 6h time ticks fit (6am, 12pm, 6pm)
+                keptTimeTicks = timeTicks6h;
             } else {
-                // Try 12h: midnight + noon
-                const every12h = all6h.filter(t => {
-                    const h = new Date(t.value).getHours();
-                    return h === 0 || h === 12;
-                });
-                if (every12h.length <= maxTicks) {
-                    result = every12h;
+                // Try 12h: noon only
+                const noons = timeTicks6h.filter(t => new Date(t.value).getHours() === 12);
+                if (noons.length <= maxTimeTicks) {
+                    keptTimeTicks = noons;
                 } else {
-                    // Midnights only
-                    result = midnights;
+                    // No time ticks, midnights only
+                    keptTimeTicks = [];
                 }
             }
 
-            axis.ticks = result.sort((a, b) => a.value - b.value);
+            axis.ticks = [...midnights, ...keptTimeTicks].sort((a, b) => a.value - b.value);
         },
         grid: {
             color: ctx => {
