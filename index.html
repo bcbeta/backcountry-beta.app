@@ -43,8 +43,22 @@
             backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
         }
         .layer-control h3 {
-            margin: 0 0 8px 0; font-size: 14px; color: #333;
-            border-bottom: 1px solid #ddd; padding-bottom: 6px;
+            margin: 0; font-size: 14px; color: #333;
+            cursor: pointer; user-select: none;
+            display: flex; align-items: center; justify-content: space-between;
+        }
+        .layer-control h3 .collapse-arrow {
+            font-size: 10px; color: #888; transition: transform 0.2s;
+        }
+        .layer-control.collapsed h3 { margin-bottom: 0; border-bottom: none; }
+        .layer-control.collapsed h3 .collapse-arrow { transform: rotate(-90deg); }
+        .layer-control .layer-body {
+            overflow: hidden; transition: max-height 0.3s ease, opacity 0.2s ease;
+            max-height: 400px; opacity: 1;
+            margin-top: 8px; border-top: 1px solid #ddd; padding-top: 6px;
+        }
+        .layer-control.collapsed .layer-body {
+            max-height: 0; opacity: 0; margin-top: 0; border-top: none; padding-top: 0;
         }
         .layer-control label {
             display: flex; align-items: center; gap: 6px;
@@ -83,8 +97,25 @@
             padding: 10px 14px; box-shadow: 0 2px 12px rgba(0,0,0,0.25);
             font-size: 12px;
             backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+            transition: opacity 0.3s ease;
         }
-        .danger-legend h4 { margin: 0 0 6px 0; font-size: 12px; color: #333; }
+        .danger-legend.hidden { display: none; }
+        .danger-legend h4 {
+            margin: 0; font-size: 12px; color: #333;
+            cursor: pointer; user-select: none;
+            display: flex; align-items: center; justify-content: space-between; gap: 8px;
+        }
+        .danger-legend h4 .collapse-arrow {
+            font-size: 9px; color: #888; transition: transform 0.2s;
+        }
+        .danger-legend .legend-body {
+            overflow: hidden; transition: max-height 0.3s ease, opacity 0.2s ease;
+            max-height: 200px; opacity: 1; margin-top: 6px;
+        }
+        .danger-legend.collapsed .legend-body {
+            max-height: 0; opacity: 0; margin-top: 0;
+        }
+        .danger-legend.collapsed h4 .collapse-arrow { transform: rotate(-90deg); }
         .legend-item {
             display: flex; align-items: center; gap: 6px; padding: 2px 0;
         }
@@ -138,16 +169,27 @@
         }
         .obs-popup a { color: #2563eb; text-decoration: none; font-size: 12px; }
 
-        /* ── Detail panel (slide-in) ── */
+        /* ── Detail panel (slide-in, resizable) ── */
         #detail-panel {
-            position: fixed; top: 0; right: 0; width: 420px; height: 100vh;
+            position: fixed; top: 0; right: 0; width: 420px; min-width: 320px; max-width: 80vw;
+            height: 100vh;
             background: #fff; z-index: 3000; box-shadow: -4px 0 20px rgba(0,0,0,0.25);
             transform: translateX(100%); transition: transform 0.3s ease;
             overflow-y: auto; overflow-x: hidden;
         }
         #detail-panel.open { transform: translateX(0); }
+        #detail-panel.resizing { transition: none; }
         @media (max-width: 500px) {
-            #detail-panel { width: 100vw; }
+            #detail-panel { width: 100vw; min-width: 100vw; }
+        }
+        .detail-resize-handle {
+            position: absolute; top: 0; left: 0; width: 6px; height: 100%;
+            cursor: col-resize; z-index: 10;
+            background: transparent;
+        }
+        .detail-resize-handle:hover,
+        .detail-resize-handle.active {
+            background: rgba(37,99,235,0.3);
         }
         .detail-header {
             position: sticky; top: 0; background: #fff; z-index: 1;
@@ -202,8 +244,9 @@
 
 <div id="map"></div>
 
-<!-- Detail panel (slide-in from right) -->
+<!-- Detail panel (slide-in from right, resizable) -->
 <div id="detail-panel">
+    <div class="detail-resize-handle" id="detail-resize-handle"></div>
     <div class="detail-header">
         <div class="detail-header-top">
             <h2 id="detail-title">Station Name</h2>
@@ -228,29 +271,33 @@
 </div>
 
 <!-- Layer toggles -->
-<div class="layer-control">
-    <h3>Map Layers</h3>
-    <div class="layer-section-title">Avalanche</div>
-    <label><input type="checkbox" id="toggle-avy-zones" checked> Danger Zones</label>
-    <label><input type="checkbox" id="toggle-avy-obs" checked> Observations</label>
+<div class="layer-control" id="layer-control">
+    <h3 onclick="document.getElementById('layer-control').classList.toggle('collapsed')">Map Layers <span class="collapse-arrow">&#9660;</span></h3>
+    <div class="layer-body">
+        <div class="layer-section-title">Avalanche</div>
+        <label><input type="checkbox" id="toggle-avy-zones" checked> Avalanche Forecasts</label>
+        <label><input type="checkbox" id="toggle-avy-obs" checked> Observations</label>
 
-    <div class="layer-section">
-        <div class="layer-section-title">Weather</div>
-        <label><input type="checkbox" id="toggle-snotel" checked> SNOTEL Stations</label>
-        <label><input type="checkbox" id="toggle-madis" checked> NWS Stations</label>
-        <label><input type="checkbox" id="toggle-cocorahs"> Precipitation</label>
+        <div class="layer-section">
+            <div class="layer-section-title">Weather</div>
+            <label><input type="checkbox" id="toggle-snotel" checked> SNOTEL Stations</label>
+            <label><input type="checkbox" id="toggle-madis" checked> NWS Stations</label>
+            <label><input type="checkbox" id="toggle-cocorahs"> Precipitation</label>
+        </div>
     </div>
 </div>
 
 <!-- Danger legend -->
-<div class="danger-legend">
-    <h4>Avalanche Danger</h4>
-    <div class="legend-item"><div class="legend-swatch" style="background:#cccccc"></div> No Rating</div>
-    <div class="legend-item"><div class="legend-swatch" style="background:#50b848"></div> Low</div>
-    <div class="legend-item"><div class="legend-swatch" style="background:#fff200"></div> Moderate</div>
-    <div class="legend-item"><div class="legend-swatch" style="background:#f7941e"></div> Considerable</div>
-    <div class="legend-item"><div class="legend-swatch" style="background:#ed1c24"></div> High</div>
-    <div class="legend-item"><div class="legend-swatch" style="background:#1a1a1a"></div> Extreme</div>
+<div class="danger-legend" id="danger-legend">
+    <h4 onclick="document.getElementById('danger-legend').classList.toggle('collapsed')">Avalanche Danger <span class="collapse-arrow">&#9660;</span></h4>
+    <div class="legend-body">
+        <div class="legend-item"><div class="legend-swatch" style="background:#cccccc"></div> No Rating</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:#50b848"></div> Low</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:#fff200"></div> Moderate</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:#f7941e"></div> Considerable</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:#ed1c24"></div> High</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:#1a1a1a"></div> Extreme</div>
+    </div>
 </div>
 
 <!-- Status bar -->
@@ -395,6 +442,11 @@ const layers = {
 // Layer toggle handlers
 document.getElementById('toggle-avy-zones').addEventListener('change', function() {
     this.checked ? map.addLayer(layers.avyZones) : map.removeLayer(layers.avyZones);
+    // Show/hide the avalanche danger legend based on checkbox state
+    const legend = document.getElementById('danger-legend');
+    if (legend) {
+        this.checked ? legend.classList.remove('hidden') : legend.classList.add('hidden');
+    }
 });
 document.getElementById('toggle-avy-obs').addEventListener('change', function() {
     this.checked ? map.addLayer(layers.avyObs) : map.removeLayer(layers.avyObs);
@@ -758,19 +810,36 @@ function loadMadisStations() {
 
     stations.forEach(s => {
         const marker = L.marker([s.lat, s.lng], { icon: ICONS.madis });
+        const safeId = (s.stationID || '').replace(/[^a-zA-Z0-9]/g, '_');
 
         marker.bindPopup(`
             <div class="station-popup">
                 <h3>${s.name}</h3>
-                <div class="station-meta">${s.stationID}${s.elevation ? ` &middot; ${Math.round(s.elevation)}ft` : ''}</div>
-                <div class="loading-data" id="madis-data-${s.stationID}">
+                <div class="station-meta">${s.stationID}${s.zone ? ` &middot; ${s.zone}` : ''}${s.elevation ? ` &middot; ${Math.round(s.elevation)}ft` : ''}</div>
+                <div class="loading-data" id="madis-data-${safeId}">
                     Loading live data...
+                </div>
+                <div style="margin-top:8px;border-top:1px solid #eee;padding-top:6px">
+                    <a href="#" class="madis-chart-link" style="color:#8b5cf6;text-decoration:none;font-size:12px;font-weight:500" data-station="${safeId}">View Charts &rarr;</a>
                 </div>
             </div>
         `, { maxWidth: 280 });
 
+        // Store station data for chart lookup
+        marker._stationData = s;
+
         marker.on('popupopen', () => {
-            if (s.stationID) fetchNWSLiveData(s.stationID, marker);
+            if (s.stationID) fetchNWSLiveData(s.stationID, marker, safeId);
+            // Wire up chart link after popup opens
+            setTimeout(() => {
+                const link = document.querySelector(`.madis-chart-link[data-station="${safeId}"]`);
+                if (link) {
+                    link.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        openDetailPanel(s);
+                    });
+                }
+            }, 50);
         });
 
         marker.addTo(layers.madis);
@@ -782,9 +851,10 @@ function loadMadisStations() {
     setStatus(`${count} NWS stations loaded`);
 }
 
-async function fetchNWSLiveData(stationId, marker) {
+async function fetchNWSLiveData(stationId, marker, safeId) {
     fetchedTemps.add(stationId); // Prevent duplicate auto-fetch
-    const container = document.getElementById(`madis-data-${stationId}`);
+    const containerId = safeId || stationId.replace(/[^a-zA-Z0-9]/g, '_');
+    const container = document.getElementById(`madis-data-${containerId}`);
     if (!container) return;
 
     try {
@@ -972,17 +1042,31 @@ function openDetailPanel(station) {
     // Close any existing popup
     map.closePopup();
 
+    // Destroy old charts
+    activeCharts.forEach(c => c.destroy());
+    activeCharts = [];
+
     // Set header info
     title.textContent = station.name || 'Unknown Station';
-    meta.textContent = `${station.tripletID} · ${station.state || ''}${station.elevation ? ` · ${Math.round(station.elevation)} ft` : ''}`;
+
+    const isMadis = station.type === 'madis';
+    const stationId = isMadis ? station.stationID : station.tripletID;
+    const zonePart = station.zone ? ` · ${station.zone}` : '';
+    const elevPart = station.elevation ? ` · ${Math.round(station.elevation)} ft` : '';
+    meta.textContent = `${stationId}${zonePart} · ${station.state || ''}${elevPart}`;
+
     conditions.innerHTML = '';
     charts.innerHTML = '<div class="detail-loading"><div class="spinner"></div>Loading chart data...</div>';
 
     // Open the panel
     panel.classList.add('open');
 
-    // Fetch 5-day hourly data for charts
-    fetchSnotelChartData(station);
+    // Fetch chart data based on station type
+    if (isMadis) {
+        fetchNWSChartData(station);
+    } else {
+        fetchSnotelChartData(station);
+    }
 }
 
 function closeDetailPanel() {
@@ -996,6 +1080,38 @@ function closeDetailPanel() {
 document.addEventListener('keydown', e => {
     if (e.key === 'Escape') closeDetailPanel();
 });
+
+// Panel resize drag logic
+(function() {
+    const panel = document.getElementById('detail-panel');
+    const handle = document.getElementById('detail-resize-handle');
+    let dragging = false;
+
+    handle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        dragging = true;
+        panel.classList.add('resizing');
+        handle.classList.add('active');
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!dragging) return;
+        const newWidth = window.innerWidth - e.clientX;
+        const clamped = Math.max(320, Math.min(newWidth, window.innerWidth * 0.8));
+        panel.style.width = clamped + 'px';
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (!dragging) return;
+        dragging = false;
+        panel.classList.remove('resizing');
+        handle.classList.remove('active');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+    });
+})();
 
 async function fetchSnotelChartData(station) {
     const tripletID = station.tripletID;
@@ -1123,11 +1239,12 @@ async function fetchSnotelChartData(station) {
 
         charts.innerHTML = chartsHtml;
 
-        // Shared X-axis config
+        // Shared X-axis config with forced day markers
         const xAxisConfig = {
             type: 'time',
             time: {
                 unit: 'hour',
+                stepSize: 6,
                 displayFormats: { hour: 'ha', day: 'MMM d' },
                 tooltipFormat: 'MMM d, h:mm a'
             },
@@ -1135,18 +1252,23 @@ async function fetchSnotelChartData(station) {
                 color: ctx => {
                     const date = new Date(ctx.tick?.value);
                     const hour = date.getHours();
-                    if (hour === 0) return 'rgba(0,0,0,0.2)';
+                    if (hour === 0) return 'rgba(0,0,0,0.25)';
                     if (hour === 12) return 'rgba(0,0,0,0.08)';
                     return 'rgba(0,0,0,0.04)';
                 },
                 lineWidth: ctx => {
                     const date = new Date(ctx.tick?.value);
-                    return date.getHours() === 0 ? 1.5 : 0.5;
+                    return date.getHours() === 0 ? 2 : 0.5;
                 }
             },
             ticks: {
                 maxRotation: 0,
-                font: { size: 10 },
+                autoSkip: false,
+                font: function(ctx) {
+                    const d = new Date(ctx.tick?.value);
+                    const isMidnight = d && d.getHours() === 0;
+                    return { size: isMidnight ? 11 : 10, weight: isMidnight ? 'bold' : 'normal' };
+                },
                 callback: function(value, index, ticks) {
                     const d = new Date(value);
                     const hour = d.getHours();
@@ -1458,6 +1580,392 @@ async function fetchSnotelChartData(station) {
 
     } catch (err) {
         console.error('Failed to fetch SNOTEL chart data:', err);
+        charts.innerHTML = '<div style="padding:40px;text-align:center;color:#c00">Failed to load chart data</div>';
+    }
+}
+
+// ============================================================
+// NWS/MADIS CHART DATA
+// ============================================================
+async function fetchNWSChartData(station) {
+    const stationId = station.stationID;
+    const conditions = document.getElementById('detail-conditions');
+    const charts = document.getElementById('detail-charts');
+
+    try {
+        // Fetch observations from the NWS API (up to 500 recent observations ≈ 5 days hourly)
+        const resp = await fetch(`https://api.weather.gov/stations/${stationId}/observations?limit=500`, {
+            headers: { 'User-Agent': 'BackcountrySkiReporter', 'Accept': 'application/geo+json' }
+        });
+        const data = await resp.json();
+
+        if (!data.features || data.features.length === 0) {
+            charts.innerHTML = '<div style="padding:40px;text-align:center;color:#999">No observation data available</div>';
+            return;
+        }
+
+        // Parse time series — NWS returns newest first, reverse for chronological
+        const obs = data.features.reverse();
+
+        const series = { temp: [], wind: [], gust: [], windDir: [], precip: [], snow: [] };
+
+        obs.forEach(f => {
+            const p = f.properties;
+            const time = new Date(p.timestamp);
+            if (isNaN(time.getTime())) return;
+
+            const tempC = p.temperature?.value;
+            if (tempC !== null && tempC !== undefined) {
+                series.temp.push({ time, value: Math.round((tempC * 9/5 + 32) * 10) / 10 });
+            }
+
+            const windMs = p.windSpeed?.value;
+            if (windMs !== null && windMs !== undefined) {
+                series.wind.push({ time, value: Math.round(windMs * 2.237 * 10) / 10 });
+            }
+
+            const gustMs = p.windGust?.value;
+            if (gustMs !== null && gustMs !== undefined) {
+                series.gust.push({ time, value: Math.round(gustMs * 2.237 * 10) / 10 });
+            }
+
+            const windDeg = p.windDirection?.value;
+            if (windDeg !== null && windDeg !== undefined) {
+                series.windDir.push({ time, value: windDeg });
+            }
+        });
+
+        // Current conditions from latest
+        const latest = (arr) => arr.length > 0 ? arr[arr.length - 1].value : null;
+        const tempNow = latest(series.temp);
+        const windNow = latest(series.wind);
+        const gustNow = latest(series.gust);
+        const windDirNow = latest(series.windDir);
+
+        // High/low temps (last 24h)
+        let tempLow = null, tempHigh = null;
+        if (series.temp.length > 0) {
+            const cutoff = Date.now() - 24 * 3600000;
+            const recent = series.temp.filter(p => p.time.getTime() >= cutoff);
+            const vals = (recent.length > 0 ? recent : series.temp).map(p => p.value);
+            tempLow = Math.min(...vals);
+            tempHigh = Math.max(...vals);
+        }
+
+        // Latest observation description
+        const latestObs = data.features[data.features.length - 1]?.properties;
+        const description = latestObs?.textDescription || '';
+
+        // Get latest data time
+        let latestTime = null;
+        if (series.temp.length > 0) {
+            latestTime = series.temp[series.temp.length - 1].time;
+        }
+
+        // Build conditions header
+        let condHtml = '';
+        if (tempNow !== null) {
+            condHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Temp</div><div class="detail-cond-value temp">${Math.round(tempNow)}°F</div></div>`;
+        }
+        if (tempLow !== null) {
+            condHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Low</div><div class="detail-cond-value">${Math.round(tempLow)}°F</div></div>`;
+        }
+        if (tempHigh !== null) {
+            condHtml += `<div class="detail-cond-item"><div class="detail-cond-label">High</div><div class="detail-cond-value">${Math.round(tempHigh)}°F</div></div>`;
+        }
+        if (windNow !== null) {
+            condHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Wind</div><div class="detail-cond-value">${Math.round(windNow)} mph</div></div>`;
+        }
+        if (gustNow !== null) {
+            condHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Gust</div><div class="detail-cond-value">${Math.round(gustNow)} mph</div></div>`;
+        }
+        if (windDirNow !== null) {
+            condHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Direction</div><div class="detail-cond-value">${degreesToCompass(windDirNow)}</div></div>`;
+        }
+        if (description) {
+            condHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Conditions</div><div class="detail-cond-value" style="font-size:13px">${description}</div></div>`;
+        }
+        if (latestTime) {
+            const timeStr = latestTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+            const metaEl = document.getElementById('detail-meta');
+            metaEl.textContent = metaEl.textContent + ` · Updated ${timeStr}`;
+        }
+        conditions.innerHTML = condHtml;
+
+        // Build chart HTML
+        activeCharts.forEach(c => c.destroy());
+        activeCharts = [];
+
+        let chartsHtml = '';
+
+        if (series.temp.length > 0) {
+            chartsHtml += `<div class="chart-section"><div class="chart-section-title">Temperature (°F)</div><div class="chart-container"><canvas id="chart-temp"></canvas></div></div>`;
+        }
+        if (series.wind.length > 0) {
+            chartsHtml += `<div class="chart-section"><div class="chart-section-title">Wind (mph)</div><div class="chart-container"><canvas id="chart-wind"></canvas></div></div>`;
+        }
+
+        if (chartsHtml === '') {
+            chartsHtml = '<div style="padding:40px;text-align:center;color:#999">No chart data available</div>';
+        }
+
+        charts.innerHTML = chartsHtml;
+
+        // Shared X-axis config (same as SNOTEL)
+        const xAxisConfig = {
+            type: 'time',
+            time: {
+                unit: 'hour',
+                stepSize: 6,
+                displayFormats: { hour: 'ha', day: 'MMM d' },
+                tooltipFormat: 'MMM d, h:mm a'
+            },
+            grid: {
+                color: ctx => {
+                    const date = new Date(ctx.tick?.value);
+                    const hour = date.getHours();
+                    if (hour === 0) return 'rgba(0,0,0,0.25)';
+                    if (hour === 12) return 'rgba(0,0,0,0.08)';
+                    return 'rgba(0,0,0,0.04)';
+                },
+                lineWidth: ctx => {
+                    const date = new Date(ctx.tick?.value);
+                    return date.getHours() === 0 ? 2 : 0.5;
+                }
+            },
+            ticks: {
+                maxRotation: 0,
+                autoSkip: false,
+                font: function(ctx) {
+                    const d = new Date(ctx.tick?.value);
+                    const isMidnight = d && d.getHours() === 0;
+                    return { size: isMidnight ? 11 : 10, weight: isMidnight ? 'bold' : 'normal' };
+                },
+                callback: function(value) {
+                    const d = new Date(value);
+                    const hour = d.getHours();
+                    if (hour === 0) return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                    if (hour === 6 || hour === 12 || hour === 18) {
+                        return d.toLocaleTimeString('en-US', { hour: 'numeric' });
+                    }
+                    return null;
+                }
+            }
+        };
+
+        const chartDefaults = {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 400 },
+            interaction: { intersect: false, mode: 'index' },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    backgroundColor: 'rgba(0,0,0,0.8)',
+                    titleFont: { size: 11 },
+                    bodyFont: { size: 12 },
+                    padding: 8,
+                    cornerRadius: 6
+                }
+            }
+        };
+
+        // ── NWS Temperature Chart ──
+        if (series.temp.length > 0) {
+            const tempData = series.temp.map(p => ({ x: p.time, y: p.value }));
+            const temps = series.temp.map(p => p.value);
+            const minT = Math.min(...temps);
+            const maxT = Math.max(...temps);
+            const crossesFreezing = minT < 32 && maxT > 32;
+
+            let highIdx = 0, lowIdx = 0;
+            temps.forEach((v, i) => { if (v > temps[highIdx]) highIdx = i; if (v < temps[lowIdx]) lowIdx = i; });
+
+            const tempDatasets = [{
+                label: 'Temperature',
+                data: tempData,
+                borderColor: '#8b5cf6',
+                backgroundColor: 'rgba(139,92,246,0.08)',
+                fill: true,
+                borderWidth: 2,
+                pointRadius: tempData.map((_, i) => (i === highIdx || i === lowIdx) ? 4 : 0),
+                pointBackgroundColor: tempData.map((_, i) => (i === highIdx || i === lowIdx) ? '#111' : 'transparent'),
+                pointBorderColor: 'transparent',
+                tension: 0.4
+            }];
+
+            if (crossesFreezing) {
+                tempDatasets.push({
+                    label: 'Freezing',
+                    data: [{ x: tempData[0].x, y: 32 }, { x: tempData[tempData.length - 1].x, y: 32 }],
+                    borderColor: 'rgba(0,0,0,0.3)',
+                    borderDash: [4, 4],
+                    borderWidth: 1,
+                    pointRadius: 0,
+                    fill: false
+                });
+            }
+
+            const tempChart = new Chart(document.getElementById('chart-temp'), {
+                type: 'line',
+                data: { datasets: tempDatasets },
+                options: {
+                    ...chartDefaults,
+                    scales: {
+                        x: xAxisConfig,
+                        y: {
+                            position: 'left',
+                            min: Math.floor(minT - 2),
+                            max: Math.ceil(maxT + 2),
+                            grid: { color: 'rgba(0,0,0,0.06)' },
+                            ticks: { font: { size: 10 } }
+                        }
+                    },
+                    plugins: {
+                        ...chartDefaults.plugins,
+                        tooltip: {
+                            ...chartDefaults.plugins.tooltip,
+                            callbacks: {
+                                label: ctx => {
+                                    if (ctx.dataset.label === 'Freezing') return null;
+                                    return `${Math.round(ctx.parsed.y)}°F`;
+                                }
+                            }
+                        }
+                    }
+                },
+                plugins: [{
+                    afterDraw(chart) {
+                        const ctx = chart.ctx;
+                        const meta = chart.getDatasetMeta(0);
+                        [highIdx, lowIdx].forEach(idx => {
+                            if (idx >= 0 && idx < meta.data.length) {
+                                const pt = meta.data[idx];
+                                const val = `${Math.round(temps[idx])}°`;
+                                ctx.save();
+                                ctx.font = '600 10px -apple-system, sans-serif';
+                                ctx.fillStyle = '#333';
+                                ctx.textAlign = 'center';
+                                const yOff = idx === highIdx ? -10 : 14;
+                                ctx.fillText(val, pt.x, pt.y + yOff);
+                                ctx.restore();
+                            }
+                        });
+                    }
+                }]
+            });
+            activeCharts.push(tempChart);
+        }
+
+        // ── NWS Wind Chart ──
+        if (series.wind.length > 0) {
+            const windData = series.wind.map(p => ({ x: p.time, y: p.value }));
+            const gustData = series.gust.map(p => ({ x: p.time, y: p.value }));
+
+            const allWind = [...series.wind.map(p => p.value), ...series.gust.map(p => p.value)];
+            const maxWind = Math.max(...allWind, 1);
+
+            const windDatasets = [{
+                label: 'Avg Speed',
+                data: windData,
+                borderColor: '#8b5cf6',
+                backgroundColor: 'rgba(139,92,246,0.08)',
+                fill: true,
+                borderWidth: 2,
+                pointRadius: 1,
+                pointBackgroundColor: '#8b5cf6',
+                tension: 0.4
+            }];
+
+            if (gustData.length > 0) {
+                windDatasets.push({
+                    label: 'Gust',
+                    data: gustData,
+                    borderColor: 'transparent',
+                    backgroundColor: '#ef4444',
+                    pointRadius: 3,
+                    pointBackgroundColor: '#ef4444',
+                    showLine: false
+                });
+            }
+
+            const windChart = new Chart(document.getElementById('chart-wind'), {
+                type: 'line',
+                data: { datasets: windDatasets },
+                options: {
+                    ...chartDefaults,
+                    plugins: {
+                        ...chartDefaults.plugins,
+                        legend: {
+                            display: gustData.length > 0,
+                            position: 'top',
+                            labels: { font: { size: 10 }, boxWidth: 12, padding: 8 }
+                        },
+                        tooltip: {
+                            ...chartDefaults.plugins.tooltip,
+                            callbacks: {
+                                label: ctx => `${ctx.dataset.label}: ${Math.round(ctx.parsed.y)} mph`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: xAxisConfig,
+                        y: {
+                            position: 'left',
+                            min: 0,
+                            max: Math.ceil(maxWind * 1.15),
+                            grid: { color: 'rgba(0,0,0,0.06)' },
+                            ticks: { font: { size: 10 } }
+                        }
+                    }
+                },
+                plugins: [{
+                    afterDraw(chart) {
+                        if (series.windDir.length === 0) return;
+                        const ctx = chart.ctx;
+                        const xScale = chart.scales.x;
+                        const yScale = chart.scales.y;
+                        const speedMap = new Map();
+                        series.wind.forEach(p => speedMap.set(p.time.getTime(), p.value));
+
+                        const step = Math.max(1, Math.floor(series.windDir.length / 30));
+                        series.windDir.forEach((p, i) => {
+                            if (i % step !== 0) return;
+                            let yVal = 0, closestDist = Infinity;
+                            series.wind.forEach(sp => {
+                                const dist = Math.abs(sp.time.getTime() - p.time.getTime());
+                                if (dist < closestDist) { closestDist = dist; yVal = sp.value; }
+                            });
+
+                            const px = xScale.getPixelForValue(p.time);
+                            const py = yScale.getPixelForValue(yVal);
+                            if (px < xScale.left || px > xScale.right) return;
+
+                            const rad = (p.value * Math.PI) / 180;
+                            const arrowLen = 8;
+                            ctx.save();
+                            ctx.translate(px, py - 14);
+                            ctx.rotate(rad);
+                            ctx.beginPath();
+                            ctx.moveTo(0, -arrowLen);
+                            ctx.lineTo(0, arrowLen);
+                            ctx.moveTo(0, -arrowLen);
+                            ctx.lineTo(-3, -arrowLen + 4);
+                            ctx.moveTo(0, -arrowLen);
+                            ctx.lineTo(3, -arrowLen + 4);
+                            ctx.strokeStyle = '#555';
+                            ctx.lineWidth = 1.5;
+                            ctx.stroke();
+                            ctx.restore();
+                        });
+                    }
+                }]
+            });
+            activeCharts.push(windChart);
+        }
+
+    } catch (err) {
+        console.error('Failed to fetch NWS chart data:', err);
         charts.innerHTML = '<div style="padding:40px;text-align:center;color:#c00">Failed to load chart data</div>';
     }
 }

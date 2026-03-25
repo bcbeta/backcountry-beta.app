@@ -150,7 +150,7 @@ def export_madis_stations():
         raw = parse_query('PFNewMadisStation', {
             'state': state_name,
             'location': {'$exists': True},
-            'avalancheForecastZone': {'$ne': 'No Zone'}
+            'avalancheForecastZone': {'$exists': True, '$nin': ['No Zone', None]}
         })
         print(f'  {state_name}: {len(raw)} MADIS stations (in avalanche zones)')
 
@@ -166,7 +166,8 @@ def export_madis_stations():
                 'lat': loc.get('latitude'),
                 'lng': loc.get('longitude'),
                 'elevation': s.get('elevation'),
-                'state': s.get('state', '')
+                'state': s.get('state', ''),
+                'zone': s.get('avalancheForecastZone', '')
             })
 
     valid = [st for st in stations if st['lat'] and st['lng']]
