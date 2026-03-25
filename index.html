@@ -206,13 +206,19 @@
         .detail-close-btn:hover { color: #333; }
         .detail-meta { color: #888; font-size: 12px; margin-top: 2px; }
         .detail-conditions {
-            display: flex; gap: 16px; flex-wrap: wrap;
             margin-top: 10px; padding-top: 8px; border-top: 1px solid #f0f0f0;
+        }
+        .detail-cond-row {
+            display: flex; gap: 16px; flex-wrap: wrap;
+        }
+        .detail-cond-row + .detail-cond-row {
+            margin-top: 6px; padding-top: 6px; border-top: 1px solid #f5f5f5;
         }
         .detail-cond-item { text-align: center; }
         .detail-cond-label { font-size: 10px; color: #999; text-transform: uppercase; letter-spacing: 0.3px; }
         .detail-cond-value { font-size: 18px; font-weight: 700; color: #222; }
         .detail-cond-value.temp { color: #2563eb; }
+        .detail-cond-value.secondary { font-size: 15px; font-weight: 600; }
 
         .detail-charts { padding: 12px 14px 24px; }
         .chart-section {
@@ -484,6 +490,20 @@ function formatDate(dateStr) {
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+// Find daily high/low indices in a time-value series
+function findDailyExtremes(series) {
+    const dayMap = {};
+    series.forEach((p, i) => {
+        const dayKey = p.time.toLocaleDateString('en-US');
+        if (!dayMap[dayKey]) dayMap[dayKey] = { highIdx: i, lowIdx: i, highVal: p.value, lowVal: p.value };
+        else {
+            if (p.value > dayMap[dayKey].highVal) { dayMap[dayKey].highVal = p.value; dayMap[dayKey].highIdx = i; }
+            if (p.value < dayMap[dayKey].lowVal) { dayMap[dayKey].lowVal = p.value; dayMap[dayKey].lowIdx = i; }
+        }
+    });
+    return Object.values(dayMap);
+}
+
 // Wind direction helper
 function degreesToCompass(deg) {
     if (deg === null || deg === undefined) return '—';
@@ -560,7 +580,7 @@ function fetchVisibleTemps(clusterGroup, stationType) {
     });
 }
 
-// Lightweight SNOTEL temp fetch (just updates the icon, no popup)
+// Lightweight SNOTEL temp fetch (updates icon or removes marker if no data)
 async function fetchSnotelTemp(tripletID, marker) {
     try {
         const url = `${CONFIG.apis.snotelData}?stationTriplets=${encodeURIComponent(tripletID)}&elements=TOBS&duration=HOURLY&periodRef=END&centralTendencyType=NONE&returnFlags=false&returnOriginalValues=false&returnSuspectData=false`;
@@ -584,13 +604,15 @@ async function fetchSnotelTemp(tripletID, marker) {
         }
         if (temp !== null) {
             marker.setIcon(createTempIcon('#2563eb', temp));
+        } else {
+            layers.snotel.removeLayer(marker);
         }
     } catch (err) {
         // Silently fail for auto-fetch
     }
 }
 
-// Lightweight NWS temp fetch (just updates the icon, no popup)
+// Lightweight NWS temp fetch (updates icon or removes marker if no data)
 async function fetchNWSTemp(stationId, marker) {
     try {
         const resp = await fetch(`https://api.weather.gov/stations/${stationId}/observations?limit=1`, {
@@ -602,8 +624,11 @@ async function fetchNWSTemp(stationId, marker) {
             if (tempC !== null && tempC !== undefined) {
                 const tempF = Math.round(tempC * 9/5 + 32);
                 marker.setIcon(createTempIcon('#8b5cf6', tempF));
+                return;
             }
         }
+        // No data — remove the marker
+        layers.madis.removeLayer(marker);
     } catch (err) {
         // Silently fail for auto-fetch
     }
@@ -940,6 +965,7 @@ async function loadAvyObservations() {
         const query = new Parse.Query(PFAvyObs);
         query.limit(5000);
         query.exists('geoPoint');
+        query.include('observationPhotos');
         // Only get observations from the last 30 days
         const thirtyDaysAgo = new Date();
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
@@ -962,14 +988,32 @@ async function loadAvyObservations() {
             const url = obs.get('observationURL') || '';
             const zone = obs.get('forecastZone') || '';
 
+            // Get first photo thumbnail URL if available
+            const photos = obs.get('observationPhotos') || [];
+            let thumbUrl = '';
+            if (photos.length > 0) {
+                const firstPhoto = photos[0];
+                if (firstPhoto && firstPhoto.get) {
+                    const thumbFile = firstPhoto.get('thumbnail');
+                    const photoFile = firstPhoto.get('photo');
+                    if (thumbFile && thumbFile.url) thumbUrl = thumbFile.url();
+                    else if (photoFile && photoFile.url) thumbUrl = photoFile.url();
+                }
+            }
+
             const marker = L.marker([lat, lng], { icon: ICONS.observation });
 
             const truncatedDesc = desc.length > 300 ? desc.substring(0, 300) + '...' : desc;
+
+            const photoHtml = thumbUrl
+                ? `<div style="margin:6px 0"><img src="${thumbUrl}" style="max-width:100%;max-height:150px;border-radius:6px;object-fit:cover;cursor:pointer" onclick="window.open('${thumbUrl}','_blank')" alt="Observation photo"></div>`
+                : '';
 
             marker.bindPopup(`
                 <div class="obs-popup">
                     <h3>${title}</h3>
                     <div class="obs-meta">${zone ? zone + ' &middot; ' : ''}${dateVal ? formatDate(dateVal.iso || dateVal) : ''}</div>
+                    ${photoHtml}
                     ${truncatedDesc ? `<div class="obs-description">${truncatedDesc}</div>` : ''}
                     ${url ? `<div style="margin-top:6px"><a href="${url}" target="_blank">View Full Report &rarr;</a></div>` : ''}
                 </div>
@@ -1184,31 +1228,36 @@ async function fetchSnotelChartData(station) {
             latestTime = series.TOBS[series.TOBS.length - 1].time;
         }
 
-        // Build conditions header
-        let condHtml = '';
+        // Build conditions header — primary row: temp, snow, wind; secondary row: high/low
+        let primaryHtml = '';
         if (tempNow !== null) {
-            condHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Temp</div><div class="detail-cond-value temp">${Math.round(tempNow)}°F</div></div>`;
-        }
-        if (tempLow !== null) {
-            condHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Low</div><div class="detail-cond-value">${Math.round(tempLow)}°F</div></div>`;
-        }
-        if (tempHigh !== null) {
-            condHtml += `<div class="detail-cond-item"><div class="detail-cond-label">High</div><div class="detail-cond-value">${Math.round(tempHigh)}°F</div></div>`;
+            primaryHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Temp</div><div class="detail-cond-value temp">${Math.round(tempNow)}°F</div></div>`;
         }
         if (snowNow !== null) {
-            condHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Snow Depth</div><div class="detail-cond-value">${Math.round(snowNow)}"</div></div>`;
+            primaryHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Snow Depth</div><div class="detail-cond-value">${Math.round(snowNow)}"</div></div>`;
         }
         if (newSnow !== null && newSnow > 0) {
-            condHtml += `<div class="detail-cond-item"><div class="detail-cond-label">New Snow</div><div class="detail-cond-value">${newSnow.toFixed(1)}"</div></div>`;
+            primaryHtml += `<div class="detail-cond-item"><div class="detail-cond-label">New Snow</div><div class="detail-cond-value">${newSnow.toFixed(1)}"</div></div>`;
         }
         if (windNow !== null) {
-            condHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Wind</div><div class="detail-cond-value">${Math.round(windNow)} mph</div></div>`;
+            primaryHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Wind</div><div class="detail-cond-value">${Math.round(windNow)} mph</div></div>`;
         }
+
+        let secondaryHtml = '';
+        if (tempLow !== null) {
+            secondaryHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Low</div><div class="detail-cond-value secondary">${Math.round(tempLow)}°F</div></div>`;
+        }
+        if (tempHigh !== null) {
+            secondaryHtml += `<div class="detail-cond-item"><div class="detail-cond-label">High</div><div class="detail-cond-value secondary">${Math.round(tempHigh)}°F</div></div>`;
+        }
+
         if (latestTime) {
             const timeStr = latestTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
             const metaEl = document.getElementById('detail-meta');
             metaEl.textContent = metaEl.textContent + ` · Updated ${timeStr}`;
         }
+        let condHtml = `<div class="detail-cond-row">${primaryHtml}</div>`;
+        if (secondaryHtml) condHtml += `<div class="detail-cond-row">${secondaryHtml}</div>`;
         conditions.innerHTML = condHtml;
 
         // Build charts
@@ -1239,47 +1288,72 @@ async function fetchSnotelChartData(station) {
 
         charts.innerHTML = chartsHtml;
 
-        // Shared X-axis config with forced day markers
-        const xAxisConfig = {
-            type: 'time',
-            time: {
-                unit: 'hour',
-                stepSize: 6,
-                displayFormats: { hour: 'ha', day: 'MMM d' },
-                tooltipFormat: 'MMM d, h:mm a'
-            },
-            grid: {
-                color: ctx => {
-                    const date = new Date(ctx.tick?.value);
-                    const hour = date.getHours();
-                    if (hour === 0) return 'rgba(0,0,0,0.25)';
-                    if (hour === 12) return 'rgba(0,0,0,0.08)';
-                    return 'rgba(0,0,0,0.04)';
+        // Shared X-axis config: dates at midnight always shown, time ticks as space allows
+        function makeXAxisConfig(chartEl) {
+            return {
+                type: 'time',
+                time: {
+                    unit: 'hour',
+                    stepSize: 6,
+                    displayFormats: { hour: 'ha', day: 'MMM d' },
+                    tooltipFormat: 'MMM d, h:mm a'
                 },
-                lineWidth: ctx => {
-                    const date = new Date(ctx.tick?.value);
-                    return date.getHours() === 0 ? 2 : 0.5;
-                }
-            },
-            ticks: {
-                maxRotation: 0,
-                autoSkip: false,
-                font: function(ctx) {
-                    const d = new Date(ctx.tick?.value);
-                    const isMidnight = d && d.getHours() === 0;
-                    return { size: isMidnight ? 11 : 10, weight: isMidnight ? 'bold' : 'normal' };
-                },
-                callback: function(value, index, ticks) {
-                    const d = new Date(value);
-                    const hour = d.getHours();
-                    if (hour === 0) return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-                    if (hour === 6 || hour === 12 || hour === 18) {
-                        return d.toLocaleTimeString('en-US', { hour: 'numeric' });
+                afterBuildTicks(axis) {
+                    // Ensure midnight ticks are always present and prioritized
+                    if (!axis.ticks || axis.ticks.length === 0) return;
+                    const midnightTicks = [];
+                    const timeTicks = [];
+                    axis.ticks.forEach(t => {
+                        const d = new Date(t.value);
+                        if (d.getHours() === 0) midnightTicks.push(t);
+                        else timeTicks.push(t);
+                    });
+                    // Calculate available width per tick
+                    const chartWidth = axis.chart?.width || 400;
+                    const maxTicks = Math.floor(chartWidth / 38); // ~38px per tick label
+                    if (axis.ticks.length > maxTicks) {
+                        // Always keep midnight, then fill remaining slots with time ticks evenly
+                        const timeSlots = Math.max(0, maxTicks - midnightTicks.length);
+                        const step = timeSlots > 0 ? Math.max(1, Math.ceil(timeTicks.length / timeSlots)) : Infinity;
+                        const kept = timeTicks.filter((_, i) => i % step === 0).slice(0, timeSlots);
+                        axis.ticks = [...midnightTicks, ...kept].sort((a, b) => a.value - b.value);
                     }
-                    return null;
+                },
+                grid: {
+                    color: ctx => {
+                        const date = new Date(ctx.tick?.value);
+                        const hour = date.getHours();
+                        if (hour === 0) return 'rgba(0,0,0,0.25)';
+                        if (hour === 12) return 'rgba(0,0,0,0.08)';
+                        return 'rgba(0,0,0,0.04)';
+                    },
+                    lineWidth: ctx => {
+                        const date = new Date(ctx.tick?.value);
+                        return date.getHours() === 0 ? 2 : 0.5;
+                    }
+                },
+                ticks: {
+                    maxRotation: 0,
+                    autoSkip: false,
+                    font: function(ctx) {
+                        const d = new Date(ctx.tick?.value);
+                        const isMidnight = d && d.getHours() === 0;
+                        return { size: isMidnight ? 11 : 10, weight: isMidnight ? 'bold' : 'normal' };
+                    },
+                    callback: function(value) {
+                        const d = new Date(value);
+                        const hour = d.getHours();
+                        if (hour === 0) return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                        if (hour === 6 || hour === 12 || hour === 18) {
+                            return d.toLocaleTimeString('en-US', { hour: 'numeric' });
+                        }
+                        return null;
+                    }
                 }
-            }
-        };
+            };
+        }
+
+        const xAxisConfig = makeXAxisConfig();
 
         const chartDefaults = {
             responsive: true,
@@ -1306,9 +1380,11 @@ async function fetchSnotelChartData(station) {
             const maxT = Math.max(...temps);
             const crossesFreezing = minT < 32 && maxT > 32;
 
-            // Find high/low points for annotations
-            let highIdx = 0, lowIdx = 0;
-            temps.forEach((v, i) => { if (v > temps[highIdx]) highIdx = i; if (v < temps[lowIdx]) lowIdx = i; });
+            // Find daily high/low indices
+            const dailyExtremes = findDailyExtremes(series.TOBS);
+
+            const extremeIndices = new Set();
+            dailyExtremes.forEach(d => { extremeIndices.add(d.highIdx); extremeIndices.add(d.lowIdx); });
 
             const tempDatasets = [{
                 label: 'Temperature',
@@ -1317,10 +1393,10 @@ async function fetchSnotelChartData(station) {
                 backgroundColor: 'rgba(37,99,235,0.08)',
                 fill: true,
                 borderWidth: 2,
-                pointRadius: tempData.map((_, i) => (i === highIdx || i === lowIdx) ? 4 : 0),
-                pointBackgroundColor: tempData.map((_, i) => (i === highIdx || i === lowIdx) ? '#111' : 'transparent'),
+                pointRadius: tempData.map((_, i) => extremeIndices.has(i) ? 4 : 0),
+                pointBackgroundColor: tempData.map((_, i) => extremeIndices.has(i) ? '#111' : 'transparent'),
                 pointBorderColor: 'transparent',
-                tension: 0.4 // cardinal-like interpolation
+                tension: 0.4
             }];
 
             // Freezing line
@@ -1365,22 +1441,23 @@ async function fetchSnotelChartData(station) {
                     }
                 },
                 plugins: [{
-                    // Annotate high/low points
                     afterDraw(chart) {
                         const ctx = chart.ctx;
                         const meta = chart.getDatasetMeta(0);
-                        [highIdx, lowIdx].forEach(idx => {
-                            if (idx >= 0 && idx < meta.data.length) {
-                                const pt = meta.data[idx];
-                                const val = `${Math.round(temps[idx])}°`;
-                                ctx.save();
-                                ctx.font = '600 10px -apple-system, sans-serif';
-                                ctx.fillStyle = '#333';
-                                ctx.textAlign = 'center';
-                                const yOff = idx === highIdx ? -10 : 14;
-                                ctx.fillText(val, pt.x, pt.y + yOff);
-                                ctx.restore();
-                            }
+                        dailyExtremes.forEach(day => {
+                            [day.highIdx, day.lowIdx].forEach(idx => {
+                                if (idx >= 0 && idx < meta.data.length) {
+                                    const pt = meta.data[idx];
+                                    const val = `${Math.round(temps[idx])}°`;
+                                    ctx.save();
+                                    ctx.font = '600 10px -apple-system, sans-serif';
+                                    ctx.fillStyle = '#333';
+                                    ctx.textAlign = 'center';
+                                    const yOff = idx === day.highIdx ? -10 : 14;
+                                    ctx.fillText(val, pt.x, pt.y + yOff);
+                                    ctx.restore();
+                                }
+                            });
                         });
                     }
                 }]
@@ -1662,34 +1739,39 @@ async function fetchNWSChartData(station) {
             latestTime = series.temp[series.temp.length - 1].time;
         }
 
-        // Build conditions header
-        let condHtml = '';
+        // Build conditions header — primary row: temp, wind, gust, direction; secondary row: high/low
+        let primaryHtml = '';
         if (tempNow !== null) {
-            condHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Temp</div><div class="detail-cond-value temp">${Math.round(tempNow)}°F</div></div>`;
-        }
-        if (tempLow !== null) {
-            condHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Low</div><div class="detail-cond-value">${Math.round(tempLow)}°F</div></div>`;
-        }
-        if (tempHigh !== null) {
-            condHtml += `<div class="detail-cond-item"><div class="detail-cond-label">High</div><div class="detail-cond-value">${Math.round(tempHigh)}°F</div></div>`;
+            primaryHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Temp</div><div class="detail-cond-value temp">${Math.round(tempNow)}°F</div></div>`;
         }
         if (windNow !== null) {
-            condHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Wind</div><div class="detail-cond-value">${Math.round(windNow)} mph</div></div>`;
+            primaryHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Wind</div><div class="detail-cond-value">${Math.round(windNow)} mph</div></div>`;
         }
         if (gustNow !== null) {
-            condHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Gust</div><div class="detail-cond-value">${Math.round(gustNow)} mph</div></div>`;
+            primaryHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Gust</div><div class="detail-cond-value">${Math.round(gustNow)} mph</div></div>`;
         }
         if (windDirNow !== null) {
-            condHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Direction</div><div class="detail-cond-value">${degreesToCompass(windDirNow)}</div></div>`;
+            primaryHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Direction</div><div class="detail-cond-value">${degreesToCompass(windDirNow)}</div></div>`;
         }
         if (description) {
-            condHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Conditions</div><div class="detail-cond-value" style="font-size:13px">${description}</div></div>`;
+            primaryHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Conditions</div><div class="detail-cond-value" style="font-size:13px">${description}</div></div>`;
         }
+
+        let secondaryHtml = '';
+        if (tempLow !== null) {
+            secondaryHtml += `<div class="detail-cond-item"><div class="detail-cond-label">Low</div><div class="detail-cond-value secondary">${Math.round(tempLow)}°F</div></div>`;
+        }
+        if (tempHigh !== null) {
+            secondaryHtml += `<div class="detail-cond-item"><div class="detail-cond-label">High</div><div class="detail-cond-value secondary">${Math.round(tempHigh)}°F</div></div>`;
+        }
+
         if (latestTime) {
             const timeStr = latestTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
             const metaEl = document.getElementById('detail-meta');
             metaEl.textContent = metaEl.textContent + ` · Updated ${timeStr}`;
         }
+        let condHtml = `<div class="detail-cond-row">${primaryHtml}</div>`;
+        if (secondaryHtml) condHtml += `<div class="detail-cond-row">${secondaryHtml}</div>`;
         conditions.innerHTML = condHtml;
 
         // Build chart HTML
@@ -1711,47 +1793,7 @@ async function fetchNWSChartData(station) {
 
         charts.innerHTML = chartsHtml;
 
-        // Shared X-axis config (same as SNOTEL)
-        const xAxisConfig = {
-            type: 'time',
-            time: {
-                unit: 'hour',
-                stepSize: 6,
-                displayFormats: { hour: 'ha', day: 'MMM d' },
-                tooltipFormat: 'MMM d, h:mm a'
-            },
-            grid: {
-                color: ctx => {
-                    const date = new Date(ctx.tick?.value);
-                    const hour = date.getHours();
-                    if (hour === 0) return 'rgba(0,0,0,0.25)';
-                    if (hour === 12) return 'rgba(0,0,0,0.08)';
-                    return 'rgba(0,0,0,0.04)';
-                },
-                lineWidth: ctx => {
-                    const date = new Date(ctx.tick?.value);
-                    return date.getHours() === 0 ? 2 : 0.5;
-                }
-            },
-            ticks: {
-                maxRotation: 0,
-                autoSkip: false,
-                font: function(ctx) {
-                    const d = new Date(ctx.tick?.value);
-                    const isMidnight = d && d.getHours() === 0;
-                    return { size: isMidnight ? 11 : 10, weight: isMidnight ? 'bold' : 'normal' };
-                },
-                callback: function(value) {
-                    const d = new Date(value);
-                    const hour = d.getHours();
-                    if (hour === 0) return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-                    if (hour === 6 || hour === 12 || hour === 18) {
-                        return d.toLocaleTimeString('en-US', { hour: 'numeric' });
-                    }
-                    return null;
-                }
-            }
-        };
+        const xAxisConfig = makeXAxisConfig();
 
         const chartDefaults = {
             responsive: true,
@@ -1778,8 +1820,9 @@ async function fetchNWSChartData(station) {
             const maxT = Math.max(...temps);
             const crossesFreezing = minT < 32 && maxT > 32;
 
-            let highIdx = 0, lowIdx = 0;
-            temps.forEach((v, i) => { if (v > temps[highIdx]) highIdx = i; if (v < temps[lowIdx]) lowIdx = i; });
+            const dailyExtremes = findDailyExtremes(series.temp);
+            const extremeIndices = new Set();
+            dailyExtremes.forEach(d => { extremeIndices.add(d.highIdx); extremeIndices.add(d.lowIdx); });
 
             const tempDatasets = [{
                 label: 'Temperature',
@@ -1788,8 +1831,8 @@ async function fetchNWSChartData(station) {
                 backgroundColor: 'rgba(139,92,246,0.08)',
                 fill: true,
                 borderWidth: 2,
-                pointRadius: tempData.map((_, i) => (i === highIdx || i === lowIdx) ? 4 : 0),
-                pointBackgroundColor: tempData.map((_, i) => (i === highIdx || i === lowIdx) ? '#111' : 'transparent'),
+                pointRadius: tempData.map((_, i) => extremeIndices.has(i) ? 4 : 0),
+                pointBackgroundColor: tempData.map((_, i) => extremeIndices.has(i) ? '#111' : 'transparent'),
                 pointBorderColor: 'transparent',
                 tension: 0.4
             }];
@@ -1838,18 +1881,20 @@ async function fetchNWSChartData(station) {
                     afterDraw(chart) {
                         const ctx = chart.ctx;
                         const meta = chart.getDatasetMeta(0);
-                        [highIdx, lowIdx].forEach(idx => {
-                            if (idx >= 0 && idx < meta.data.length) {
-                                const pt = meta.data[idx];
-                                const val = `${Math.round(temps[idx])}°`;
-                                ctx.save();
-                                ctx.font = '600 10px -apple-system, sans-serif';
-                                ctx.fillStyle = '#333';
-                                ctx.textAlign = 'center';
-                                const yOff = idx === highIdx ? -10 : 14;
-                                ctx.fillText(val, pt.x, pt.y + yOff);
-                                ctx.restore();
-                            }
+                        dailyExtremes.forEach(day => {
+                            [day.highIdx, day.lowIdx].forEach(idx => {
+                                if (idx >= 0 && idx < meta.data.length) {
+                                    const pt = meta.data[idx];
+                                    const val = `${Math.round(temps[idx])}°`;
+                                    ctx.save();
+                                    ctx.font = '600 10px -apple-system, sans-serif';
+                                    ctx.fillStyle = '#333';
+                                    ctx.textAlign = 'center';
+                                    const yOff = idx === day.highIdx ? -10 : 14;
+                                    ctx.fillText(val, pt.x, pt.y + yOff);
+                                    ctx.restore();
+                                }
+                            });
                         });
                     }
                 }]
