@@ -116,6 +116,63 @@
         .map-type-btn.active { background: #2563eb; color: #fff; }
         .map-type-btn:hover:not(.active) { background: #e8e8e8; }
 
+        /* ── Forecast location search ── */
+        .forecast-search {
+            position: absolute; top: 52px; left: 60px; z-index: 1000;
+        }
+        .forecast-search input {
+            padding: 7px 12px 7px 30px; border: none; border-radius: 8px;
+            background: rgba(255,255,255,0.92); box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+            font-size: 12px; color: #333; width: 220px; outline: none;
+        }
+        .forecast-search input:focus { background: #fff; box-shadow: 0 2px 12px rgba(0,0,0,0.3); }
+        .forecast-search::before {
+            content: '\1F50D'; position: absolute; left: 9px; top: 50%; transform: translateY(-50%);
+            font-size: 13px; pointer-events: none;
+        }
+
+        /* ── Forecast toast ── */
+        .forecast-toast {
+            position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%);
+            z-index: 1500; background: rgba(0,0,0,0.8); color: #fff;
+            border-radius: 8px; padding: 8px 16px; font-size: 12px;
+            display: flex; align-items: center; gap: 10px; white-space: nowrap;
+            backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+            animation: toastFadeIn 0.3s ease;
+        }
+        .forecast-toast.hidden { display: none; }
+        .forecast-toast button {
+            background: none; border: none; color: #aaa; cursor: pointer;
+            font-size: 16px; line-height: 1; padding: 0;
+        }
+        @keyframes toastFadeIn { from { opacity: 0; transform: translateX(-50%) translateY(10px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+
+        /* ── Daily forecast periods ── */
+        .forecast-daily {
+            display: flex; flex-direction: column; gap: 0;
+            margin-bottom: 14px;
+        }
+        .forecast-period {
+            display: flex; align-items: flex-start; gap: 10px;
+            padding: 8px 10px; border-bottom: 1px solid #f0f0f0;
+        }
+        .forecast-period:last-child { border-bottom: none; }
+        .forecast-period-icon {
+            width: 40px; height: 40px; border-radius: 6px; flex-shrink: 0;
+            background: #f0f4ff;
+        }
+        .forecast-period-info { flex: 1; min-width: 0; }
+        .forecast-period-name {
+            font-size: 13px; font-weight: 600; color: #222;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .forecast-period-temp {
+            font-size: 13px; font-weight: 700; color: #2563eb;
+        }
+        .forecast-period-temp.night { color: #6b7280; }
+        .forecast-period-wind { font-size: 11px; color: #888; margin-top: 1px; }
+        .forecast-period-summary { font-size: 11px; color: #555; margin-top: 2px; line-height: 1.3; }
+
         /* ── Danger legend ── */
         .danger-legend {
             position: absolute; bottom: 30px; left: 12px; z-index: 1000;
@@ -148,6 +205,12 @@
         .legend-swatch {
             width: 18px; height: 14px; border-radius: 3px;
             border: 1px solid rgba(0,0,0,0.15);
+        }
+
+        /* ── Version label ── */
+        #version-label {
+            position: absolute; bottom: 8px; left: 12px; z-index: 999;
+            color: rgba(0,0,0,0.35); font-size: 10px; pointer-events: none;
         }
 
         /* ── Station status bar ── */
@@ -302,6 +365,11 @@
     <button class="map-type-btn" data-type="topo">Topo</button>
 </div>
 
+<!-- Forecast location search -->
+<div class="forecast-search" id="forecast-search">
+    <input type="text" id="forecast-search-input" placeholder="Search location for forecast...">
+</div>
+
 <!-- Layer toggles -->
 <div class="layer-control" id="layer-control">
     <h3 onclick="document.getElementById('layer-control').classList.toggle('collapsed')">Map Layers <span class="collapse-arrow">&#9660;</span></h3>
@@ -345,6 +413,15 @@
         <div class="legend-item"><div class="legend-swatch" style="background:#1a1a1a"></div> Extreme</div>
     </div>
 </div>
+
+<!-- Forecast toast (first-visit hint) -->
+<div class="forecast-toast hidden" id="forecast-toast">
+    Right-click or long-press the map for a point weather forecast
+    <button onclick="dismissForecastToast()">&times;</button>
+</div>
+
+<!-- Version label -->
+<div id="version-label">v0.7</div>
 
 <!-- Status bar -->
 <div id="status-bar">Ready</div>
@@ -581,6 +658,68 @@ function findDailyExtremes(series) {
         }
     });
     return Object.values(dayMap);
+}
+
+// Shared X-axis config: dates at midnight always shown, time ticks as space allows
+function makeXAxisConfig() {
+    return {
+        type: 'time',
+        time: {
+            unit: 'hour',
+            stepSize: 6,
+            displayFormats: { hour: 'ha', day: 'MMM d' },
+            tooltipFormat: 'MMM d, h:mm a'
+        },
+        afterBuildTicks(axis) {
+            if (!axis.ticks || axis.ticks.length === 0) return;
+            const midnightTicks = [];
+            const timeTicks = [];
+            axis.ticks.forEach(t => {
+                const d = new Date(t.value);
+                if (d.getHours() === 0) midnightTicks.push(t);
+                else timeTicks.push(t);
+            });
+            const chartWidth = axis.chart?.width || 400;
+            const maxTicks = Math.floor(chartWidth / 38);
+            if (axis.ticks.length > maxTicks) {
+                const timeSlots = Math.max(0, maxTicks - midnightTicks.length);
+                const step = timeSlots > 0 ? Math.max(1, Math.ceil(timeTicks.length / timeSlots)) : Infinity;
+                const kept = timeTicks.filter((_, i) => i % step === 0).slice(0, timeSlots);
+                axis.ticks = [...midnightTicks, ...kept].sort((a, b) => a.value - b.value);
+            }
+        },
+        grid: {
+            color: ctx => {
+                const date = new Date(ctx.tick?.value);
+                const hour = date.getHours();
+                if (hour === 0) return 'rgba(0,0,0,0.25)';
+                if (hour === 12) return 'rgba(0,0,0,0.08)';
+                return 'rgba(0,0,0,0.04)';
+            },
+            lineWidth: ctx => {
+                const date = new Date(ctx.tick?.value);
+                return date.getHours() === 0 ? 2 : 0.5;
+            }
+        },
+        ticks: {
+            maxRotation: 0,
+            autoSkip: false,
+            font: function(ctx) {
+                const d = new Date(ctx.tick?.value);
+                const isMidnight = d && d.getHours() === 0;
+                return { size: isMidnight ? 11 : 10, weight: isMidnight ? 'bold' : 'normal' };
+            },
+            callback: function(value) {
+                const d = new Date(value);
+                const hour = d.getHours();
+                if (hour === 0) return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                if (hour === 6 || hour === 12 || hour === 18) {
+                    return d.toLocaleTimeString('en-US', { hour: 'numeric' });
+                }
+                return null;
+            }
+        }
+    };
 }
 
 // Wind direction helper
@@ -1400,71 +1539,6 @@ async function fetchSnotelChartData(station) {
 
         charts.innerHTML = chartsHtml;
 
-        // Shared X-axis config: dates at midnight always shown, time ticks as space allows
-        function makeXAxisConfig(chartEl) {
-            return {
-                type: 'time',
-                time: {
-                    unit: 'hour',
-                    stepSize: 6,
-                    displayFormats: { hour: 'ha', day: 'MMM d' },
-                    tooltipFormat: 'MMM d, h:mm a'
-                },
-                afterBuildTicks(axis) {
-                    // Ensure midnight ticks are always present and prioritized
-                    if (!axis.ticks || axis.ticks.length === 0) return;
-                    const midnightTicks = [];
-                    const timeTicks = [];
-                    axis.ticks.forEach(t => {
-                        const d = new Date(t.value);
-                        if (d.getHours() === 0) midnightTicks.push(t);
-                        else timeTicks.push(t);
-                    });
-                    // Calculate available width per tick
-                    const chartWidth = axis.chart?.width || 400;
-                    const maxTicks = Math.floor(chartWidth / 38); // ~38px per tick label
-                    if (axis.ticks.length > maxTicks) {
-                        // Always keep midnight, then fill remaining slots with time ticks evenly
-                        const timeSlots = Math.max(0, maxTicks - midnightTicks.length);
-                        const step = timeSlots > 0 ? Math.max(1, Math.ceil(timeTicks.length / timeSlots)) : Infinity;
-                        const kept = timeTicks.filter((_, i) => i % step === 0).slice(0, timeSlots);
-                        axis.ticks = [...midnightTicks, ...kept].sort((a, b) => a.value - b.value);
-                    }
-                },
-                grid: {
-                    color: ctx => {
-                        const date = new Date(ctx.tick?.value);
-                        const hour = date.getHours();
-                        if (hour === 0) return 'rgba(0,0,0,0.25)';
-                        if (hour === 12) return 'rgba(0,0,0,0.08)';
-                        return 'rgba(0,0,0,0.04)';
-                    },
-                    lineWidth: ctx => {
-                        const date = new Date(ctx.tick?.value);
-                        return date.getHours() === 0 ? 2 : 0.5;
-                    }
-                },
-                ticks: {
-                    maxRotation: 0,
-                    autoSkip: false,
-                    font: function(ctx) {
-                        const d = new Date(ctx.tick?.value);
-                        const isMidnight = d && d.getHours() === 0;
-                        return { size: isMidnight ? 11 : 10, weight: isMidnight ? 'bold' : 'normal' };
-                    },
-                    callback: function(value) {
-                        const d = new Date(value);
-                        const hour = d.getHours();
-                        if (hour === 0) return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-                        if (hour === 6 || hour === 12 || hour === 18) {
-                            return d.toLocaleTimeString('en-US', { hour: 'numeric' });
-                        }
-                        return null;
-                    }
-                }
-            };
-        }
-
         const xAxisConfig = makeXAxisConfig();
 
         const chartDefaults = {
@@ -2126,6 +2200,577 @@ async function fetchNWSChartData(station) {
         charts.innerHTML = '<div style="padding:40px;text-align:center;color:#c00">Failed to load chart data</div>';
     }
 }
+
+// ============================================================
+// 7. NOAA POINT FORECAST (right-click / search)
+// ============================================================
+
+let forecastPin = null;
+
+// ── Forecast pin icon ──
+const FORECAST_PIN_ICON = L.divIcon({
+    html: '<div style="background:#2563eb;width:14px;height:14px;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.4)"></div>',
+    className: '', iconSize: [14, 14], iconAnchor: [7, 7]
+});
+
+// ── Place or move forecast pin ──
+function placeForecastPin(lat, lng) {
+    if (forecastPin) {
+        forecastPin.setLatLng([lat, lng]);
+    } else {
+        forecastPin = L.marker([lat, lng], { icon: FORECAST_PIN_ICON, draggable: true, zIndexOffset: 5000 }).addTo(map);
+        forecastPin.on('dragend', function() {
+            const pos = forecastPin.getLatLng();
+            loadPointForecast(pos.lat, pos.lng);
+        });
+    }
+}
+
+// ── Right-click handler (desktop) ──
+map.on('contextmenu', function(e) {
+    L.DomEvent.preventDefault(e.originalEvent);
+    placeForecastPin(e.latlng.lat, e.latlng.lng);
+    loadPointForecast(e.latlng.lat, e.latlng.lng);
+});
+
+// ── Long-press handler (mobile) ──
+(function() {
+    let longPressTimer = null;
+    let startPos = null;
+    const mapEl = map.getContainer();
+
+    mapEl.addEventListener('touchstart', function(e) {
+        if (e.touches.length !== 1) return;
+        startPos = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        longPressTimer = setTimeout(function() {
+            const latlng = map.containerPointToLatLng(L.point(startPos.x, startPos.y));
+            placeForecastPin(latlng.lat, latlng.lng);
+            loadPointForecast(latlng.lat, latlng.lng);
+        }, 600);
+    }, { passive: true });
+
+    mapEl.addEventListener('touchmove', function(e) {
+        if (longPressTimer && startPos && e.touches.length === 1) {
+            const dx = e.touches[0].clientX - startPos.x;
+            const dy = e.touches[0].clientY - startPos.y;
+            if (Math.sqrt(dx*dx + dy*dy) > 10) {
+                clearTimeout(longPressTimer);
+                longPressTimer = null;
+            }
+        }
+    }, { passive: true });
+
+    mapEl.addEventListener('touchend', function() {
+        if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+    }, { passive: true });
+
+    mapEl.addEventListener('touchcancel', function() {
+        if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+    }, { passive: true });
+})();
+
+// ── Location search (Nominatim) ──
+document.getElementById('forecast-search-input').addEventListener('keydown', async function(e) {
+    if (e.key !== 'Enter') return;
+    const query = this.value.trim();
+    if (!query) return;
+
+    try {
+        setStatus('Searching location...');
+        const resp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`, {
+            headers: { 'User-Agent': 'BackcountrySkiReporter/1.0' }
+        });
+        const results = await resp.json();
+        if (results.length === 0) {
+            setStatus('Location not found');
+            return;
+        }
+        const lat = parseFloat(results[0].lat);
+        const lng = parseFloat(results[0].lon);
+        map.setView([lat, lng], 12);
+        placeForecastPin(lat, lng);
+        loadPointForecast(lat, lng);
+    } catch (err) {
+        console.error('Geocoding error:', err);
+        setStatus('Search failed');
+    }
+});
+
+// ── Parse ISO 8601 duration/validTime into hourly time series ──
+function expandGridSeries(values) {
+    const series = [];
+    if (!values || !values.length) return series;
+
+    values.forEach(v => {
+        if (v.value === null || v.value === undefined) return;
+        const parts = v.validTime.split('/');
+        if (parts.length !== 2) return;
+        const startTime = new Date(parts[0]);
+        const dur = parts[1]; // e.g. "PT1H", "PT3H", "P1D"
+
+        // Parse ISO 8601 duration
+        let totalHours = 0;
+        const dayMatch = dur.match(/(\d+)D/);
+        const hourMatch = dur.match(/(\d+)H/);
+        if (dayMatch) totalHours += parseInt(dayMatch[1]) * 24;
+        if (hourMatch) totalHours += parseInt(hourMatch[1]);
+        if (totalHours === 0) totalHours = 1;
+
+        for (let h = 0; h < totalHours; h++) {
+            const t = new Date(startTime.getTime() + h * 3600000);
+            series.push({ time: t, value: v.value });
+        }
+    });
+
+    return series;
+}
+
+// ── Load point forecast ──
+async function loadPointForecast(lat, lng) {
+    const panel = document.getElementById('detail-panel');
+    const title = document.getElementById('detail-title');
+    const meta = document.getElementById('detail-meta');
+    const conditions = document.getElementById('detail-conditions');
+    const charts = document.getElementById('detail-charts');
+
+    map.closePopup();
+    activeCharts.forEach(c => c.destroy());
+    activeCharts = [];
+
+    title.textContent = 'Point Forecast';
+    meta.textContent = `${lat.toFixed(4)}°, ${lng.toFixed(4)}°`;
+    conditions.innerHTML = '';
+    charts.innerHTML = '<div class="detail-loading"><div class="spinner"></div>Loading forecast...</div>';
+    panel.classList.add('open');
+
+    try {
+        setStatus('Fetching grid point...');
+
+        // Step 1: Get grid coordinates
+        const pointResp = await fetch(`https://api.weather.gov/points/${lat.toFixed(4)},${lng.toFixed(4)}`, {
+            headers: { 'User-Agent': 'BackcountrySkiReporter/1.0', 'Accept': 'application/geo+json' }
+        });
+        if (!pointResp.ok) throw new Error(`Points API returned ${pointResp.status}`);
+        const pointData = await pointResp.json();
+        const { gridX, gridY, cwa, relativeLocation } = pointData.properties;
+
+        // Update meta with location name if available
+        if (relativeLocation?.properties) {
+            const loc = relativeLocation.properties;
+            meta.textContent = `${loc.city || ''}, ${loc.state || ''} · ${lat.toFixed(4)}°, ${lng.toFixed(4)}°`;
+        }
+
+        setStatus('Fetching forecasts...');
+
+        // Step 2: Fetch daily and hourly data in parallel
+        const [dailyResp, hourlyResp] = await Promise.all([
+            fetch(`https://api.weather.gov/gridpoints/${cwa}/${gridX},${gridY}/forecast`, {
+                headers: { 'User-Agent': 'BackcountrySkiReporter/1.0', 'Accept': 'application/geo+json' }
+            }),
+            fetch(`https://api.weather.gov/gridpoints/${cwa}/${gridX},${gridY}`, {
+                headers: { 'User-Agent': 'BackcountrySkiReporter/1.0', 'Accept': 'application/geo+json' }
+            })
+        ]);
+
+        if (!dailyResp.ok) throw new Error(`Daily forecast API returned ${dailyResp.status}`);
+        if (!hourlyResp.ok) throw new Error(`Hourly grid API returned ${hourlyResp.status}`);
+
+        const dailyData = await dailyResp.json();
+        const hourlyData = await hourlyResp.json();
+
+        // Update elevation in meta
+        const elevM = hourlyData.properties?.elevation?.value;
+        if (elevM !== null && elevM !== undefined) {
+            const elevFt = Math.round(elevM * 3.28084);
+            const metaBase = meta.textContent;
+            meta.textContent = `${metaBase} · ${elevFt.toLocaleString()} ft`;
+        }
+
+        // Render daily forecast + hourly charts
+        renderPointForecast(dailyData.properties.periods, hourlyData.properties);
+        setStatus('Point forecast loaded');
+
+    } catch (err) {
+        console.error('Point forecast error:', err);
+        charts.innerHTML = `<div style="padding:40px;text-align:center;color:#c00">Failed to load forecast<br><span style="font-size:11px;color:#999">${err.message}</span></div>`;
+        setStatus('Forecast failed');
+    }
+}
+
+// ── Render daily periods + hourly charts ──
+function renderPointForecast(periods, gridProps) {
+    const charts = document.getElementById('detail-charts');
+
+    // Build daily forecast HTML
+    let html = '<div class="forecast-daily">';
+    periods.forEach(p => {
+        const tempClass = p.isDaytime ? '' : ' night';
+        const windText = p.windSpeed ? `Wind: ${p.windSpeed} ${p.windDirection || ''}` : '';
+        html += `
+            <div class="forecast-period">
+                <img class="forecast-period-icon" src="${p.icon}" alt="${p.shortForecast}">
+                <div class="forecast-period-info">
+                    <div class="forecast-period-name">
+                        ${p.name}
+                        <span class="forecast-period-temp${tempClass}">${p.temperature}°F</span>
+                    </div>
+                    ${windText ? `<div class="forecast-period-wind">${windText}</div>` : ''}
+                    <div class="forecast-period-summary">${p.shortForecast}</div>
+                </div>
+            </div>`;
+    });
+    html += '</div>';
+
+    // Build hourly chart containers
+    html += `
+        <div class="chart-section">
+            <div class="chart-title">Temperature</div>
+            <div class="chart-container"><canvas id="chart-fc-temp"></canvas></div>
+        </div>
+        <div class="chart-section">
+            <div class="chart-title">Wind</div>
+            <div class="chart-container"><canvas id="chart-fc-wind"></canvas></div>
+        </div>
+        <div class="chart-section">
+            <div class="chart-title">Precipitation</div>
+            <div class="chart-container"><canvas id="chart-fc-precip"></canvas></div>
+        </div>`;
+
+    charts.innerHTML = html;
+
+    // Expand gridded data into time series
+    const tempSeries = expandGridSeries(gridProps.temperature?.values || []);
+    const windSeries = expandGridSeries(gridProps.windSpeed?.values || []);
+    const gustSeries = expandGridSeries(gridProps.windGust?.values || []);
+    const windDirSeries = expandGridSeries(gridProps.windDirection?.values || []);
+    const popSeries = expandGridSeries(gridProps.probabilityOfPrecipitation?.values || []);
+    const snowSeries = expandGridSeries(gridProps.snowfallAmount?.values || []);
+
+    // Limit to ~7 days
+    const cutoff = Date.now() + 7 * 24 * 3600000;
+    const filterFuture = s => s.filter(p => p.time.getTime() <= cutoff && p.time.getTime() >= Date.now() - 3600000);
+
+    const temp = filterFuture(tempSeries);
+    const wind = filterFuture(windSeries);
+    const gust = filterFuture(gustSeries);
+    const windDir = filterFuture(windDirSeries);
+    const pop = filterFuture(popSeries);
+    const snow = filterFuture(snowSeries);
+
+    // Convert temps C→F, wind m/s→mph (NWS grid returns SI units with unit codes)
+    // NWS gridpoint data: temp in °C, wind in km/h, snowfall in mm
+    const tempF = temp.map(p => ({ time: p.time, value: Math.round(p.value * 9/5 + 32) }));
+    const windMph = wind.map(p => ({ time: p.time, value: Math.round(p.value * 0.621371) }));
+    const gustMph = gust.map(p => ({ time: p.time, value: Math.round(p.value * 0.621371) }));
+    const snowIn = snow.map(p => ({ time: p.time, value: Math.round(p.value / 25.4 * 10) / 10 }));
+
+    // Shared chart config
+    const xAxisConfig = makeXAxisConfig();
+    const chartDefaults = {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 400 },
+        interaction: { intersect: false, mode: 'index' },
+        plugins: {
+            legend: false,
+            tooltip: { backgroundColor: 'rgba(0,0,0,0.8)', titleFont: { size: 11 }, bodyFont: { size: 11 }, padding: 8, cornerRadius: 6 }
+        }
+    };
+
+    // ── Temperature chart ──
+    if (tempF.length > 0) {
+        const dailyExtremes = findDailyExtremes(tempF);
+        const extremeIndices = new Set();
+        dailyExtremes.forEach(d => { extremeIndices.add(d.highIdx); extremeIndices.add(d.lowIdx); });
+
+        const tempData = tempF.map(p => ({ x: p.time, y: p.value }));
+        const allTemps = tempF.map(p => p.value);
+        const minT = Math.min(...allTemps);
+        const maxT = Math.max(...allTemps);
+
+        const tempDatasets = [{
+            label: 'Temperature',
+            data: tempData,
+            borderColor: '#2563eb',
+            backgroundColor: 'rgba(37,99,235,0.08)',
+            fill: true,
+            borderWidth: 2,
+            pointRadius: tempData.map((_, i) => extremeIndices.has(i) ? 4 : 0),
+            pointBackgroundColor: tempData.map((_, i) => extremeIndices.has(i) ? '#111' : 'transparent'),
+            tension: 0.4
+        }];
+
+        // Add freezing line if temps cross 32°F
+        if (minT < 32 && maxT > 32) {
+            tempDatasets.push({
+                label: 'Freezing',
+                data: [{ x: tempData[0].x, y: 32 }, { x: tempData[tempData.length-1].x, y: 32 }],
+                borderColor: 'rgba(59,130,246,0.3)',
+                borderWidth: 1,
+                borderDash: [4, 4],
+                pointRadius: 0,
+                fill: false
+            });
+        }
+
+        const tempChart = new Chart(document.getElementById('chart-fc-temp'), {
+            type: 'line',
+            data: { datasets: tempDatasets },
+            options: {
+                ...chartDefaults,
+                scales: {
+                    x: xAxisConfig,
+                    y: {
+                        position: 'left',
+                        min: Math.floor((minT - 5) / 5) * 5,
+                        max: Math.ceil((maxT + 5) / 5) * 5,
+                        grid: { color: 'rgba(0,0,0,0.06)' },
+                        ticks: { font: { size: 10 }, callback: v => `${v}°` }
+                    }
+                },
+                plugins: {
+                    ...chartDefaults.plugins,
+                    tooltip: {
+                        ...chartDefaults.plugins.tooltip,
+                        callbacks: {
+                            label: ctx => {
+                                if (ctx.dataset.label === 'Freezing') return null;
+                                return `${Math.round(ctx.parsed.y)}°F`;
+                            }
+                        }
+                    }
+                }
+            },
+            plugins: [{
+                afterDraw(chart) {
+                    const ctx = chart.ctx;
+                    const xScale = chart.scales.x;
+                    const yScale = chart.scales.y;
+                    const ds = chart.data.datasets[0];
+                    dailyExtremes.forEach(day => {
+                        [{ idx: day.highIdx, val: day.highVal, label: 'H', color: '#c00' },
+                         { idx: day.lowIdx, val: day.lowVal, label: 'L', color: '#0066cc' }].forEach(e => {
+                            if (e.idx >= ds.data.length) return;
+                            const pt = ds.data[e.idx];
+                            const px = xScale.getPixelForValue(pt.x);
+                            const py = yScale.getPixelForValue(pt.y);
+                            if (px < xScale.left || px > xScale.right) return;
+                            const yOff = e.label === 'H' ? -10 : 14;
+                            ctx.save();
+                            ctx.font = 'bold 10px -apple-system, sans-serif';
+                            ctx.fillStyle = e.color;
+                            ctx.textAlign = 'center';
+                            ctx.fillText(`${Math.round(e.val)}°`, px, py + yOff);
+                            ctx.restore();
+                        });
+                    });
+                }
+            }]
+        });
+        activeCharts.push(tempChart);
+    }
+
+    // ── Wind chart ──
+    if (windMph.length > 0) {
+        const windData = windMph.map(p => ({ x: p.time, y: p.value }));
+        const gustData = gustMph.filter(p => p.value > 0).map(p => ({ x: p.time, y: p.value }));
+        const allWind = [...windMph.map(p => p.value), ...gustMph.map(p => p.value)];
+        const maxW = Math.max(...allWind, 10);
+
+        const windDatasets = [{
+            label: 'Avg Wind',
+            data: windData,
+            borderColor: '#059669',
+            backgroundColor: 'rgba(5,150,105,0.08)',
+            fill: true,
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.4
+        }];
+
+        if (gustData.length > 0) {
+            windDatasets.push({
+                label: 'Gust',
+                data: gustData,
+                borderColor: '#dc2626',
+                backgroundColor: '#dc2626',
+                pointRadius: 2,
+                pointStyle: 'circle',
+                showLine: false
+            });
+        }
+
+        const windChart = new Chart(document.getElementById('chart-fc-wind'), {
+            type: 'line',
+            data: { datasets: windDatasets },
+            options: {
+                ...chartDefaults,
+                scales: {
+                    x: xAxisConfig,
+                    y: {
+                        position: 'left',
+                        min: 0,
+                        max: Math.ceil(maxW / 10) * 10 + 5,
+                        grid: { color: 'rgba(0,0,0,0.06)' },
+                        ticks: { font: { size: 10 }, callback: v => `${v}` }
+                    }
+                },
+                plugins: {
+                    ...chartDefaults.plugins,
+                    legend: {
+                        display: gustData.length > 0,
+                        position: 'top',
+                        labels: { font: { size: 10 }, boxWidth: 12, padding: 8 }
+                    },
+                    tooltip: {
+                        ...chartDefaults.plugins.tooltip,
+                        callbacks: { label: ctx => `${ctx.dataset.label}: ${Math.round(ctx.parsed.y)} mph` }
+                    }
+                }
+            },
+            plugins: [{
+                afterDraw(chart) {
+                    if (windDir.length === 0) return;
+                    const ctx = chart.ctx;
+                    const xScale = chart.scales.x;
+                    const yScale = chart.scales.y;
+                    const step = Math.max(1, Math.floor(windDir.length / 20));
+                    windDir.forEach((p, i) => {
+                        if (i % step !== 0) return;
+                        let yVal = 0, closestDist = Infinity;
+                        windMph.forEach(sp => {
+                            const dist = Math.abs(sp.time.getTime() - p.time.getTime());
+                            if (dist < closestDist) { closestDist = dist; yVal = sp.value; }
+                        });
+                        const px = xScale.getPixelForValue(p.time);
+                        const py = yScale.getPixelForValue(yVal);
+                        if (px < xScale.left || px > xScale.right) return;
+                        const rad = (p.value * Math.PI) / 180;
+                        const arrowLen = 8;
+                        ctx.save();
+                        ctx.translate(px, py - 14);
+                        ctx.rotate(rad);
+                        ctx.beginPath();
+                        ctx.moveTo(0, -arrowLen);
+                        ctx.lineTo(0, arrowLen);
+                        ctx.moveTo(0, -arrowLen);
+                        ctx.lineTo(-3, -arrowLen + 4);
+                        ctx.moveTo(0, -arrowLen);
+                        ctx.lineTo(3, -arrowLen + 4);
+                        ctx.strokeStyle = '#555';
+                        ctx.lineWidth = 1.5;
+                        ctx.stroke();
+                        ctx.restore();
+                    });
+                }
+            }]
+        });
+        activeCharts.push(windChart);
+    }
+
+    // ── Precipitation chart ──
+    if (pop.length > 0 || snowIn.length > 0) {
+        const popData = pop.map(p => ({ x: p.time, y: p.value }));
+        const snowData = snowIn.filter(p => p.value > 0).map(p => ({ x: p.time, y: p.value }));
+
+        const precipDatasets = [];
+
+        if (popData.length > 0) {
+            precipDatasets.push({
+                label: 'Precip %',
+                data: popData,
+                borderColor: '#6366f1',
+                backgroundColor: 'rgba(99,102,241,0.1)',
+                fill: true,
+                borderWidth: 2,
+                pointRadius: 0,
+                tension: 0.4,
+                yAxisID: 'y'
+            });
+        }
+
+        if (snowData.length > 0) {
+            precipDatasets.push({
+                label: 'Snowfall',
+                data: snowData,
+                type: 'bar',
+                backgroundColor: 'rgba(59,130,246,0.5)',
+                borderColor: '#2563eb',
+                borderWidth: 1,
+                barPercentage: 1.0,
+                categoryPercentage: 1.0,
+                yAxisID: 'y1'
+            });
+        }
+
+        const maxSnow = snowData.length > 0 ? Math.max(...snowData.map(d => d.y), 1) : 1;
+
+        const precipChart = new Chart(document.getElementById('chart-fc-precip'), {
+            type: 'line',
+            data: { datasets: precipDatasets },
+            options: {
+                ...chartDefaults,
+                scales: {
+                    x: xAxisConfig,
+                    y: {
+                        position: 'left',
+                        min: 0,
+                        max: 100,
+                        grid: { color: 'rgba(0,0,0,0.06)' },
+                        ticks: { font: { size: 10 }, callback: v => `${v}%` },
+                        title: { display: false }
+                    },
+                    ...(snowData.length > 0 ? {
+                        y1: {
+                            position: 'right',
+                            min: 0,
+                            max: Math.ceil(maxSnow + 0.5),
+                            grid: { drawOnChartArea: false },
+                            ticks: { font: { size: 10 }, callback: v => `${v}"` },
+                            title: { display: false }
+                        }
+                    } : {})
+                },
+                plugins: {
+                    ...chartDefaults.plugins,
+                    legend: {
+                        display: precipDatasets.length > 1,
+                        position: 'top',
+                        labels: { font: { size: 10 }, boxWidth: 12, padding: 8 }
+                    },
+                    tooltip: {
+                        ...chartDefaults.plugins.tooltip,
+                        callbacks: {
+                            label: ctx => {
+                                if (ctx.dataset.label === 'Precip %') return `Precip: ${Math.round(ctx.parsed.y)}%`;
+                                return `Snow: ${ctx.parsed.y}"`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        activeCharts.push(precipChart);
+    }
+}
+
+// ── Forecast toast (first-visit hint) ──
+function showForecastToast() {
+    if (localStorage.getItem('forecastToastDismissed')) return;
+    const toast = document.getElementById('forecast-toast');
+    toast.classList.remove('hidden');
+    setTimeout(dismissForecastToast, 8000);
+}
+
+function dismissForecastToast() {
+    const toast = document.getElementById('forecast-toast');
+    toast.classList.add('hidden');
+    localStorage.setItem('forecastToastDismissed', '1');
+}
+
+// Show toast after a short delay
+setTimeout(showForecastToast, 2000);
+
 </script>
 </body>
 </html>
