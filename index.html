@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Backcountry Ski Reporter</title>
+
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <!-- Leaflet Marker Cluster CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+
+        #map { width: 100vw; height: 100vh; }
+
+        /* ── Loading overlay ── */
+        #loading-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.6); z-index: 2000;
+            display: flex; align-items: center; justify-content: center;
+            flex-direction: column; color: #fff; font-size: 16px;
+        }
+        .spinner {
+            width: 40px; height: 40px; border: 4px solid rgba(255,255,255,0.3);
+            border-top-color: #fff; border-radius: 50%;
+            animation: spin 0.8s linear infinite; margin-bottom: 12px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ── Layer control panel ── */
+        .layer-control {
+            position: absolute; top: 12px; right: 12px; z-index: 1000;
+            background: rgba(255,255,255,0.95); border-radius: 10px;
+            padding: 12px 14px; box-shadow: 0 2px 12px rgba(0,0,0,0.25);
+            font-size: 13px; min-width: 200px;
+            backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+        }
+        .layer-control h3 {
+            margin: 0 0 8px 0; font-size: 14px; color: #333;
+            border-bottom: 1px solid #ddd; padding-bottom: 6px;
+        }
+        .layer-control label {
+            display: flex; align-items: center; gap: 6px;
+            padding: 4px 0; cursor: pointer; color: #444;
+        }
+        .layer-control input[type="checkbox"] {
+            width: 16px; height: 16px; accent-color: #2563eb;
+        }
+        .layer-section {
+            margin-top: 10px; padding-top: 8px; border-top: 1px solid #eee;
+        }
+        .layer-section-title {
+            font-size: 11px; font-weight: 600; color: #888;
+            text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;
+        }
+
+        /* ── Map type buttons ── */
+        .map-type-control {
+            position: absolute; top: 12px; left: 60px; z-index: 1000;
+            display: flex; gap: 0; border-radius: 8px; overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+        }
+        .map-type-btn {
+            padding: 8px 14px; border: none; background: rgba(255,255,255,0.92);
+            font-size: 12px; font-weight: 500; cursor: pointer; color: #555;
+            border-right: 1px solid #ddd; transition: all 0.15s;
+        }
+        .map-type-btn:last-child { border-right: none; }
+        .map-type-btn.active { background: #2563eb; color: #fff; }
+        .map-type-btn:hover:not(.active) { background: #e8e8e8; }
+
+        /* ── Danger legend ── */
+        .danger-legend {
+            position: absolute; bottom: 30px; left: 12px; z-index: 1000;
+            background: rgba(255,255,255,0.95); border-radius: 10px;
+            padding: 10px 14px; box-shadow: 0 2px 12px rgba(0,0,0,0.25);
+            font-size: 12px;
+            backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+        }
+        .danger-legend h4 { margin: 0 0 6px 0; font-size: 12px; color: #333; }
+        .legend-item {
+            display: flex; align-items: center; gap: 6px; padding: 2px 0;
+        }
+        .legend-swatch {
+            width: 18px; height: 14px; border-radius: 3px;
+            border: 1px solid rgba(0,0,0,0.15);
+        }
+
+        /* ── Station status bar ── */
+        #status-bar {
+            position: absolute; bottom: 8px; right: 12px; z-index: 1000;
+            background: rgba(0,0,0,0.6); color: #ccc; border-radius: 6px;
+            padding: 4px 10px; font-size: 11px;
+            backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+        }
+
+        /* ── Popup styles ── */
+        .leaflet-popup-content-wrapper {
+            border-radius: 10px !important;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.2) !important;
+        }
+        .leaflet-popup-content { margin: 10px 14px !important; font-size: 13px; }
+
+        .avy-popup { min-width: 220px; }
+        .avy-popup h3 { margin: 0 0 6px 0; font-size: 15px; color: #222; }
+        .avy-popup .danger-badge {
+            display: inline-block; padding: 3px 10px; border-radius: 4px;
+            color: #fff; font-weight: 600; font-size: 13px; margin-bottom: 6px;
+        }
+        .avy-popup .detail-row { color: #555; margin: 3px 0; font-size: 12px; }
+        .avy-popup a { color: #2563eb; text-decoration: none; font-size: 12px; }
+        .avy-popup a:hover { text-decoration: underline; }
+
+        .station-popup { min-width: 200px; }
+        .station-popup h3 { margin: 0 0 4px 0; font-size: 14px; color: #222; }
+        .station-popup .station-meta { color: #888; font-size: 11px; margin-bottom: 6px; }
+        .station-popup .weather-grid {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px;
+        }
+        .station-popup .weather-item { font-size: 12px; color: #444; }
+        .station-popup .weather-label { color: #888; font-size: 11px; }
+        .station-popup .weather-value { font-weight: 600; font-size: 14px; }
+        .station-popup .loading-data { color: #999; font-style: italic; font-size: 12px; }
+
+        .obs-popup { min-width: 240px; max-width: 320px; }
+        .obs-popup h3 { margin: 0 0 4px 0; font-size: 14px; color: #222; }
+        .obs-popup .obs-meta { color: #888; font-size: 11px; margin-bottom: 6px; }
+        .obs-popup .obs-description {
+            font-size: 12px; color: #444; margin: 6px 0;
+            max-height: 120px; overflow-y: auto;
+        }
+        .obs-popup a { color: #2563eb; text-decoration: none; font-size: 12px; }
+    </style>
+</head>
+<body>
+
+<div id="loading-overlay">
+    <div class="spinner"></div>
+    <div id="loading-text">Loading avalanche zones...</div>
+</div>
+
+<div id="map"></div>
+
+<!-- Map type switcher -->
+<div class="map-type-control">
+    <button class="map-type-btn active" data-type="street">Street</button>
+    <button class="map-type-btn" data-type="satellite">Satellite</button>
+    <button class="map-type-btn" data-type="topo">Topo</button>
+</div>
+
+<!-- Layer toggles -->
+<div class="layer-control">
+    <h3>Map Layers</h3>
+    <div class="layer-section-title">Avalanche</div>
+    <label><input type="checkbox" id="toggle-avy-zones" checked> Danger Zones</label>
+    <label><input type="checkbox" id="toggle-avy-obs" checked> Observations</label>
+
+    <div class="layer-section">
+        <div class="layer-section-title">Weather</div>
+        <label><input type="checkbox" id="toggle-snotel" checked> SNOTEL Stations</label>
+        <label><input type="checkbox" id="toggle-madis" checked> NWS Stations</label>
+        <label><input type="checkbox" id="toggle-cocorahs"> Precipitation</label>
+    </div>
+</div>
+
+<!-- Danger legend -->
+<div class="danger-legend">
+    <h4>Avalanche Danger</h4>
+    <div class="legend-item"><div class="legend-swatch" style="background:#cccccc"></div> No Rating</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:#50b848"></div> Low</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:#fff200"></div> Moderate</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:#f7941e"></div> Considerable</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:#ed1c24"></div> High</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:#1a1a1a"></div> Extreme</div>
+</div>
+
+<!-- Status bar -->
+<div id="status-bar">Ready</div>
+
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- Leaflet Marker Cluster -->
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<!-- Parse SDK -->
+<script src="https://unpkg.com/parse/dist/parse.min.js"></script>
+
+<script>
+// ============================================================
+// CONFIGURATION
+// ============================================================
+const CONFIG = {
+    parse: {
+        appId: 'zgqRRfY6Tr5ICfdPocRLZG8EXK59vfS5dpDM5bqr',
+        jsKey: '2KBoLKZWbEnRWK3lJ70ycxTTNRYKmC01pbdqbKXK',
+        serverURL: 'https://parseapi.back4app.com'
+    },
+    map: {
+        center: [39.75, -105.99],  // Colorado
+        zoom: 7
+    },
+    apis: {
+        avyZones: 'https://api.avalanche.org/v2/public/products/map-layer',
+        snotelMeta: 'https://wcc.sc.egov.usda.gov/awdbRestApi/services/v1/stations',
+        snotelData: 'https://wcc.sc.egov.usda.gov/awdbRestApi/services/v1/data',
+        nwsStations: 'https://api.weather.gov/stations',
+        nwsObs: 'https://api.weather.gov/stations/{id}/observations',
+        cocorahs: 'https://data.cocorahs.org/export/exportreports.aspx'
+    }
+};
+
+// Avalanche danger colors matching the iOS app
+const DANGER_COLORS = {
+    0: { color: '#cccccc', label: 'No Rating' },
+    1: { color: '#50b848', label: 'Low' },
+    2: { color: '#fff200', label: 'Moderate' },
+    3: { color: '#f7941e', label: 'Considerable' },
+    4: { color: '#ed1c24', label: 'High' },
+    5: { color: '#1a1a1a', label: 'Extreme' }
+};
+
+// ============================================================
+// INITIALIZE PARSE
+// ============================================================
+Parse.initialize(CONFIG.parse.appId, CONFIG.parse.jsKey);
+Parse.serverURL = CONFIG.parse.serverURL;
+
+// ============================================================
+// INITIALIZE MAP
+// ============================================================
+const map = L.map('map', {
+    center: CONFIG.map.center,
+    zoom: CONFIG.map.zoom,
+    zoomControl: true
+});
+
+// Tile layers
+const tileLayers = {
+    street: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors',
+        maxZoom: 19
+    }),
+    satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        attribution: '&copy; Esri &mdash; Sources: Esri, DigitalGlobe, GeoEye, Earthstar, CNES/Airbus',
+        maxZoom: 18
+    }),
+    topo: L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenTopoMap (CC-BY-SA)',
+        maxZoom: 17
+    })
+};
+
+// Start with street map
+tileLayers.street.addTo(map);
+let activeBaseLayer = 'street';
+
+// Map type switcher
+document.querySelectorAll('.map-type-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const type = btn.dataset.type;
+        if (type === activeBaseLayer) return;
+        map.removeLayer(tileLayers[activeBaseLayer]);
+        tileLayers[type].addTo(map);
+        activeBaseLayer = type;
+        document.querySelectorAll('.map-type-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+    });
+});
+
+// ============================================================
+// LAYER GROUPS
+// ============================================================
+const layers = {
+    avyZones: L.layerGroup().addTo(map),
+    avyObs: L.markerClusterGroup({
+        maxClusterRadius: 40,
+        iconCreateFunction: function(cluster) {
+            const count = cluster.getChildCount();
+            return L.divIcon({
+                html: `<div style="background:#e74c3c;color:#fff;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3)">${count}</div>`,
+                className: '', iconSize: [32, 32]
+            });
+        }
+    }).addTo(map),
+    snotel: L.markerClusterGroup({
+        maxClusterRadius: 40,
+        iconCreateFunction: function(cluster) {
+            const count = cluster.getChildCount();
+            return L.divIcon({
+                html: `<div style="background:#2563eb;color:#fff;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3)">${count}</div>`,
+                className: '', iconSize: [32, 32]
+            });
+        }
+    }).addTo(map),
+    madis: L.markerClusterGroup({
+        maxClusterRadius: 40,
+        iconCreateFunction: function(cluster) {
+            const count = cluster.getChildCount();
+            return L.divIcon({
+                html: `<div style="background:#8b5cf6;color:#fff;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3)">${count}</div>`,
+                className: '', iconSize: [32, 32]
+            });
+        }
+    }).addTo(map),
+    cocorahs: L.markerClusterGroup({
+        maxClusterRadius: 40,
+        iconCreateFunction: function(cluster) {
+            const count = cluster.getChildCount();
+            return L.divIcon({
+                html: `<div style="background:#059669;color:#fff;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3)">${count}</div>`,
+                className: '', iconSize: [32, 32]
+            });
+        }
+    })
+};
+
+// Layer toggle handlers
+document.getElementById('toggle-avy-zones').addEventListener('change', function() {
+    this.checked ? map.addLayer(layers.avyZones) : map.removeLayer(layers.avyZones);
+});
+document.getElementById('toggle-avy-obs').addEventListener('change', function() {
+    this.checked ? map.addLayer(layers.avyObs) : map.removeLayer(layers.avyObs);
+});
+document.getElementById('toggle-snotel').addEventListener('change', function() {
+    this.checked ? map.addLayer(layers.snotel) : map.removeLayer(layers.snotel);
+});
+document.getElementById('toggle-madis').addEventListener('change', function() {
+    this.checked ? map.addLayer(layers.madis) : map.removeLayer(layers.madis);
+});
+document.getElementById('toggle-cocorahs').addEventListener('change', function() {
+    this.checked ? map.addLayer(layers.cocorahs) : map.removeLayer(layers.cocorahs);
+});
+
+// ============================================================
+// UTILITY
+// ============================================================
+function setStatus(text) {
+    document.getElementById('status-bar').textContent = text;
+}
+
+function setLoading(show, text) {
+    const overlay = document.getElementById('loading-overlay');
+    if (show) {
+        document.getElementById('loading-text').textContent = text || 'Loading...';
+        overlay.style.display = 'flex';
+    } else {
+        overlay.style.display = 'none';
+    }
+}
+
+function formatDate(dateStr) {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+// Wind direction helper
+function degreesToCompass(deg) {
+    if (deg === null || deg === undefined) return '—';
+    const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+    return dirs[Math.round(deg / 22.5) % 16];
+}
+
+// SVG icon helpers
+function createSvgIcon(svgContent, size, anchor) {
+    return L.divIcon({
+        html: svgContent,
+        className: '',
+        iconSize: size || [28, 28],
+        iconAnchor: anchor || [14, 14]
+    });
+}
+
+// Create a temperature-labeled marker icon
+function createTempIcon(bgColor, tempF) {
+    const tempLabel = tempF !== null && tempF !== undefined ? `${Math.round(tempF)}°` : '—';
+    const width = tempLabel.length > 3 ? 40 : 34;
+    return L.divIcon({
+        html: `<div style="background:${bgColor};color:#fff;border-radius:12px;padding:2px 6px;font-size:11px;font-weight:700;white-space:nowrap;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3);text-align:center;line-height:16px">${tempLabel}</div>`,
+        className: '',
+        iconSize: [width, 22],
+        iconAnchor: [width / 2, 11]
+    });
+}
+
+const ICONS = {
+    snotel: createSvgIcon(
+        `<svg width="28" height="28" viewBox="0 0 28 28"><circle cx="14" cy="14" r="12" fill="#2563eb" stroke="#fff" stroke-width="2"/><text x="14" y="18" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">&#x2744;</text></svg>`
+    ),
+    madis: createSvgIcon(
+        `<svg width="28" height="28" viewBox="0 0 28 28"><circle cx="14" cy="14" r="12" fill="#8b5cf6" stroke="#fff" stroke-width="2"/><text x="14" y="19" text-anchor="middle" fill="#fff" font-size="16">&#x26C5;</text></svg>`
+    ),
+    cocorahs: createSvgIcon(
+        `<svg width="28" height="28" viewBox="0 0 28 28"><circle cx="14" cy="14" r="12" fill="#059669" stroke="#fff" stroke-width="2"/><text x="14" y="19" text-anchor="middle" fill="#fff" font-size="14">&#x1F327;</text></svg>`
+    ),
+    observation: createSvgIcon(
+        `<svg width="28" height="28" viewBox="0 0 28 28"><circle cx="14" cy="14" r="12" fill="#e74c3c" stroke="#fff" stroke-width="2"/><text x="14" y="19" text-anchor="middle" fill="#fff" font-size="14">&#x26A0;</text></svg>`
+    )
+};
+
+// ============================================================
+// LIVE TEMP AUTO-FETCH
+// ============================================================
+// Track which stations already have temp data fetched
+const fetchedTemps = new Set();
+// Map from marker._leaflet_id to station info for auto-fetch
+const markerStationMap = new Map();
+
+// Fetch temps for all visible (unclustered) markers in a layer
+function fetchVisibleTemps(clusterGroup, stationType) {
+    const visibleMarkers = [];
+    clusterGroup.eachLayer(marker => {
+        // Only process markers that are directly on the map (not inside a cluster)
+        if (!marker._icon) return;
+        const info = markerStationMap.get(marker._leaflet_id);
+        if (!info || fetchedTemps.has(info.id)) return;
+        visibleMarkers.push({ marker, info });
+    });
+
+    if (visibleMarkers.length === 0) return;
+    console.log(`Auto-fetching temps for ${visibleMarkers.length} visible ${stationType} stations`);
+
+    visibleMarkers.forEach(({ marker, info }) => {
+        fetchedTemps.add(info.id);
+        if (stationType === 'snotel') {
+            fetchSnotelTemp(info.id, marker);
+        } else if (stationType === 'madis') {
+            fetchNWSTemp(info.id, marker);
+        }
+    });
+}
+
+// Lightweight SNOTEL temp fetch (just updates the icon, no popup)
+async function fetchSnotelTemp(tripletID, marker) {
+    try {
+        const url = `${CONFIG.apis.snotelData}?stationTriplets=${encodeURIComponent(tripletID)}&elements=TOBS&duration=HOURLY&periodRef=END&centralTendencyType=NONE&returnFlags=false&returnOriginalValues=false&returnSuspectData=false`;
+        const resp = await fetch(url);
+        const data = await resp.json();
+        let temp = null;
+        if (data && data.length > 0) {
+            data.forEach(datum => {
+                if (!datum.data) return;
+                datum.data.forEach(series => {
+                    const values = series.values;
+                    if (!values || values.length === 0) return;
+                    for (let i = values.length - 1; i >= 0; i--) {
+                        if (values[i].value !== null && values[i].value !== undefined) {
+                            temp = values[i].value;
+                            break;
+                        }
+                    }
+                });
+            });
+        }
+        if (temp !== null) {
+            marker.setIcon(createTempIcon('#2563eb', temp));
+        }
+    } catch (err) {
+        // Silently fail for auto-fetch
+    }
+}
+
+// Lightweight NWS temp fetch (just updates the icon, no popup)
+async function fetchNWSTemp(stationId, marker) {
+    try {
+        const resp = await fetch(`https://api.weather.gov/stations/${stationId}/observations?limit=1`, {
+            headers: { 'User-Agent': 'BackcountrySkiReporter', 'Accept': 'application/geo+json' }
+        });
+        const data = await resp.json();
+        if (data.features && data.features.length > 0) {
+            const tempC = data.features[0].properties.temperature?.value;
+            if (tempC !== null && tempC !== undefined) {
+                const tempF = Math.round(tempC * 9/5 + 32);
+                marker.setIcon(createTempIcon('#8b5cf6', tempF));
+            }
+        }
+    } catch (err) {
+        // Silently fail for auto-fetch
+    }
+}
+
+// ============================================================
+// STATIC STATION DATA
+// ============================================================
+// Loaded from stations.json (exported from Parse via export-stations.py)
+let stationData = null;
+
+async function loadStationData() {
+    try {
+        const resp = await fetch('stations.json');
+        stationData = await resp.json();
+        console.log(`Loaded station data: ${stationData.snotel.length} SNOTEL, ${stationData.madis.length} MADIS, ${stationData.cocorahs.length} CoCoRaHS`);
+    } catch (err) {
+        console.error('Failed to load stations.json:', err);
+        stationData = { snotel: [], madis: [], cocorahs: [] };
+    }
+}
+
+// ============================================================
+// 1. AVALANCHE ZONES (from avalanche.org public API)
+// ============================================================
+async function loadAvyZones() {
+    setStatus('Loading avalanche zones...');
+    try {
+        const resp = await fetch(CONFIG.apis.avyZones);
+        const data = await resp.json();
+
+        let zoneCount = 0;
+        data.features.forEach(feature => {
+            const props = feature.properties;
+            const danger = props.danger_level || 0;
+            const dangerInfo = DANGER_COLORS[danger] || DANGER_COLORS[0];
+
+            if (!feature.geometry || !feature.geometry.coordinates) return;
+
+            // GeoJSON uses [lng, lat], Leaflet needs [lat, lng]
+            const geoLayer = L.geoJSON(feature.geometry, {
+                style: {
+                    fillColor: dangerInfo.color,
+                    fillOpacity: 0.35,
+                    color: dangerInfo.color,
+                    weight: 1.5,
+                    opacity: 0.7
+                }
+            });
+
+            // Popup
+            const warningHtml = props.warning && props.warning.product
+                ? `<div style="color:#ed1c24;font-weight:600;font-size:12px;margin-top:4px">&#x26A0; ${props.warning.product.toUpperCase()}</div>`
+                : '';
+
+            geoLayer.bindPopup(`
+                <div class="avy-popup">
+                    <h3>${props.name || 'Unknown Zone'}</h3>
+                    <div class="danger-badge" style="background:${dangerInfo.color};${danger===2?'color:#333':''}">
+                        ${dangerInfo.label} (${danger}/5)
+                    </div>
+                    ${warningHtml}
+                    <div class="detail-row"><strong>Center:</strong> ${props.center || '—'}</div>
+                    <div class="detail-row"><strong>Valid:</strong> ${formatDate(props.start_date)} – ${formatDate(props.end_date)}</div>
+                    ${props.travel_advice ? `<div class="detail-row" style="margin-top:4px"><strong>Travel Advice:</strong> ${props.travel_advice}</div>` : ''}
+                    ${props.link ? `<div style="margin-top:6px"><a href="${props.link}" target="_blank">View Full Forecast &rarr;</a></div>` : ''}
+                </div>
+            `, { maxWidth: 300 });
+
+            geoLayer.addTo(layers.avyZones);
+            zoneCount++;
+        });
+
+        setStatus(`${zoneCount} avalanche zones loaded`);
+    } catch (err) {
+        console.error('Failed to load avalanche zones:', err);
+        setStatus('Error loading avalanche zones');
+    }
+}
+
+// ============================================================
+// 2. SNOTEL STATIONS (from stations.json, live data on click)
+// ============================================================
+function loadSnotelStations() {
+    setStatus('Loading SNOTEL stations...');
+    const stations = stationData?.snotel || [];
+    let count = 0;
+
+    stations.forEach(s => {
+        const marker = L.marker([s.lat, s.lng], { icon: ICONS.snotel });
+        const safeId = (s.tripletID || '').replace(/[^a-zA-Z0-9]/g, '_');
+
+        marker.bindPopup(`
+            <div class="station-popup">
+                <h3>${s.name}</h3>
+                <div class="station-meta">${s.tripletID} &middot; ${s.state}${s.elevation ? ` &middot; ${Math.round(s.elevation)}ft` : ''}</div>
+                <div class="loading-data" id="snotel-data-${safeId}">
+                    Loading live data...
+                </div>
+            </div>
+        `, { maxWidth: 280 });
+
+        marker.on('popupopen', () => {
+            if (s.tripletID) fetchSnotelLiveData(s.tripletID, marker);
+        });
+
+        marker.addTo(layers.snotel);
+        // Register for auto-fetch
+        markerStationMap.set(marker._leaflet_id, { id: s.tripletID, type: 'snotel' });
+        count++;
+    });
+
+    setStatus(`${count} SNOTEL stations loaded`);
+}
+
+async function fetchSnotelLiveData(tripletID, marker) {
+    fetchedTemps.add(tripletID); // Prevent duplicate auto-fetch
+    const safeId = tripletID.replace(/[^a-zA-Z0-9]/g, '_');
+    const container = document.getElementById(`snotel-data-${safeId}`);
+    if (!container) return;
+
+    try {
+        const url = `${CONFIG.apis.snotelData}?stationTriplets=${encodeURIComponent(tripletID)}&elements=TOBS,SNWD,WTEQ,WSPDV&duration=HOURLY&periodRef=END&centralTendencyType=NONE&returnFlags=false&returnOriginalValues=false&returnSuspectData=false`;
+        const resp = await fetch(url);
+        const data = await resp.json();
+
+        let temp = null, snow = null, swe = null, wind = null;
+
+        if (data && data.length > 0) {
+            data.forEach(datum => {
+                if (!datum.data) return;
+                datum.data.forEach(series => {
+                    const code = series.stationElement?.elementCode;
+                    const values = series.values;
+                    if (!values || values.length === 0) return;
+                    // Get most recent non-null value
+                    for (let i = values.length - 1; i >= 0; i--) {
+                        if (values[i].value !== null && values[i].value !== undefined) {
+                            if (code === 'TOBS') temp = values[i].value;
+                            else if (code === 'SNWD') snow = values[i].value;
+                            else if (code === 'WTEQ') swe = values[i].value;
+                            else if (code === 'WSPDV') wind = values[i].value;
+                            break;
+                        }
+                    }
+                });
+            });
+        }
+
+        // Update marker icon to show temperature
+        if (temp !== null && marker) {
+            marker.setIcon(createTempIcon('#2563eb', temp));
+        }
+
+        container.innerHTML = `
+            <div class="weather-grid">
+                <div class="weather-item">
+                    <div class="weather-label">Temperature</div>
+                    <div class="weather-value">${temp !== null ? temp + '&deg;F' : '—'}</div>
+                </div>
+                <div class="weather-item">
+                    <div class="weather-label">Snow Depth</div>
+                    <div class="weather-value">${snow !== null ? snow + '"' : '—'}</div>
+                </div>
+                <div class="weather-item">
+                    <div class="weather-label">SWE</div>
+                    <div class="weather-value">${swe !== null ? swe + '"' : '—'}</div>
+                </div>
+                <div class="weather-item">
+                    <div class="weather-label">Wind</div>
+                    <div class="weather-value">${wind !== null ? wind + ' mph' : '—'}</div>
+                </div>
+            </div>
+        `;
+    } catch (err) {
+        container.innerHTML = '<div style="color:#c00;font-size:12px">Could not load live data</div>';
+        console.error('SNOTEL data fetch error:', err);
+    }
+}
+
+// ============================================================
+// 3. MADIS / NWS STATIONS (from stations.json, live temp on click)
+// ============================================================
+function loadMadisStations() {
+    setStatus('Loading NWS weather stations...');
+    const stations = stationData?.madis || [];
+    let count = 0;
+
+    stations.forEach(s => {
+        const marker = L.marker([s.lat, s.lng], { icon: ICONS.madis });
+
+        marker.bindPopup(`
+            <div class="station-popup">
+                <h3>${s.name}</h3>
+                <div class="station-meta">${s.stationID}${s.elevation ? ` &middot; ${Math.round(s.elevation)}ft` : ''}</div>
+                <div class="loading-data" id="madis-data-${s.stationID}">
+                    Loading live data...
+                </div>
+            </div>
+        `, { maxWidth: 280 });
+
+        marker.on('popupopen', () => {
+            if (s.stationID) fetchNWSLiveData(s.stationID, marker);
+        });
+
+        marker.addTo(layers.madis);
+        // Register for auto-fetch
+        markerStationMap.set(marker._leaflet_id, { id: s.stationID, type: 'madis' });
+        count++;
+    });
+
+    setStatus(`${count} NWS stations loaded`);
+}
+
+async function fetchNWSLiveData(stationId, marker) {
+    fetchedTemps.add(stationId); // Prevent duplicate auto-fetch
+    const container = document.getElementById(`madis-data-${stationId}`);
+    if (!container) return;
+
+    try {
+        const resp = await fetch(`https://api.weather.gov/stations/${stationId}/observations?limit=1`, {
+            headers: { 'User-Agent': 'BackcountrySkiReporter', 'Accept': 'application/geo+json' }
+        });
+        const data = await resp.json();
+
+        if (data.features && data.features.length > 0) {
+            const obs = data.features[0].properties;
+            const tempC = obs.temperature?.value;
+            const tempF = tempC !== null && tempC !== undefined ? Math.round(tempC * 9/5 + 32) : null;
+            const windMs = obs.windSpeed?.value;
+            const windMph = windMs !== null && windMs !== undefined ? Math.round(windMs * 2.237) : null;
+            const windDir = obs.windDirection?.value;
+
+            // Update the marker icon to show temperature after first fetch
+            if (tempF !== null && marker) {
+                marker.setIcon(createTempIcon('#8b5cf6', tempF));
+            }
+
+            container.innerHTML = `
+                <div class="weather-grid">
+                    <div class="weather-item">
+                        <div class="weather-label">Temperature</div>
+                        <div class="weather-value">${tempF !== null ? tempF + '&deg;F' : '—'}</div>
+                    </div>
+                    <div class="weather-item">
+                        <div class="weather-label">Wind</div>
+                        <div class="weather-value">${windMph !== null ? windMph + ' mph' : '—'}</div>
+                    </div>
+                    <div class="weather-item">
+                        <div class="weather-label">Wind Dir</div>
+                        <div class="weather-value">${windDir !== null ? degreesToCompass(windDir) : '—'}</div>
+                    </div>
+                    <div class="weather-item">
+                        <div class="weather-label">Description</div>
+                        <div class="weather-value" style="font-size:11px">${obs.textDescription || '—'}</div>
+                    </div>
+                </div>
+            `;
+        } else {
+            container.innerHTML = '<div style="color:#999;font-size:12px">No recent observations</div>';
+        }
+    } catch (err) {
+        container.innerHTML = '<div style="color:#c00;font-size:12px">Could not load live data</div>';
+        console.error('NWS data fetch error:', err);
+    }
+}
+
+// ============================================================
+// 4. CoCoRaHS PRECIPITATION (from stations.json)
+// ============================================================
+function loadCoCoRaHSStations() {
+    setStatus('Loading precipitation stations...');
+    const stations = stationData?.cocorahs || [];
+    let count = 0;
+
+    stations.forEach(s => {
+        const marker = L.marker([s.lat, s.lng], { icon: ICONS.cocorahs });
+
+        marker.bindPopup(`
+            <div class="station-popup">
+                <h3>${s.name}</h3>
+                <div class="station-meta">${s.cocorahsID}${s.elevation ? ` &middot; ${Math.round(s.elevation)}ft` : ''}</div>
+            </div>
+        `, { maxWidth: 250 });
+
+        marker.addTo(layers.cocorahs);
+        count++;
+    });
+
+    setStatus(`${count} precipitation stations loaded`);
+}
+
+// ============================================================
+// 5. AVALANCHE OBSERVATIONS (from Parse)
+// ============================================================
+async function loadAvyObservations() {
+    setStatus('Loading avalanche observations...');
+    try {
+        const PFAvyObs = Parse.Object.extend('PFAvalancheCenterObservation');
+        const query = new Parse.Query(PFAvyObs);
+        query.limit(5000);
+        query.exists('geoPoint');
+        // Only get observations from the last 30 days
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        query.greaterThan('observationDate', thirtyDaysAgo);
+        query.descending('observationDate');
+
+        const results = await query.find();
+        let count = 0;
+
+        results.forEach(obs => {
+            const geo = obs.get('geoPoint');
+            if (!geo) return;
+
+            const lat = geo.latitude;
+            const lng = geo.longitude;
+            const title = obs.get('title') || obs.get('forecastZone') || 'Observation';
+            const desc = obs.get('observationDescription') || '';
+            const detail = obs.get('observationDetail') || '';
+            const dateVal = obs.get('observationDate');
+            const url = obs.get('observationURL') || '';
+            const zone = obs.get('forecastZone') || '';
+
+            const marker = L.marker([lat, lng], { icon: ICONS.observation });
+
+            const truncatedDesc = desc.length > 300 ? desc.substring(0, 300) + '...' : desc;
+
+            marker.bindPopup(`
+                <div class="obs-popup">
+                    <h3>${title}</h3>
+                    <div class="obs-meta">${zone ? zone + ' &middot; ' : ''}${dateVal ? formatDate(dateVal.iso || dateVal) : ''}</div>
+                    ${truncatedDesc ? `<div class="obs-description">${truncatedDesc}</div>` : ''}
+                    ${url ? `<div style="margin-top:6px"><a href="${url}" target="_blank">View Full Report &rarr;</a></div>` : ''}
+                </div>
+            `, { maxWidth: 320 });
+
+            marker.addTo(layers.avyObs);
+            count++;
+        });
+
+        setStatus(`${count} observations loaded`);
+    } catch (err) {
+        console.error('Failed to load avalanche observations:', err);
+        setStatus('Error loading observations');
+    }
+}
+
+// ============================================================
+// BOOT
+// ============================================================
+async function init() {
+    try {
+        // Load static station data and avalanche zones in parallel
+        await Promise.all([
+            loadStationData(),
+            loadAvyZones()
+        ]);
+        setLoading(false);
+
+        // Create station markers from static JSON (synchronous, fast)
+        loadSnotelStations();
+        loadMadisStations();
+        loadCoCoRaHSStations();
+
+        // Auto-fetch temps when markers become unclustered
+        const triggerAutoFetch = () => {
+            fetchVisibleTemps(layers.snotel, 'snotel');
+            fetchVisibleTemps(layers.madis, 'madis');
+        };
+        layers.snotel.on('animationend', triggerAutoFetch);
+        layers.madis.on('animationend', triggerAutoFetch);
+        map.on('moveend', triggerAutoFetch);
+        // Initial fetch for any already-visible markers
+        setTimeout(triggerAutoFetch, 500);
+
+        // Load observations from Parse (async, needs network)
+        await loadAvyObservations();
+
+        setStatus('All layers loaded');
+    } catch (err) {
+        console.error('Init error:', err);
+        setLoading(false);
+        setStatus('Error during initialization');
+    }
+}
+
+init();
+</script>
+</body>
+</html>
