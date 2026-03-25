@@ -309,6 +309,22 @@
         }
         .detail-close-btn:hover { color: #333; }
         .detail-meta { color: #888; font-size: 12px; margin-top: 2px; }
+        .detail-actions {
+            display: flex; align-items: center; gap: 8px; margin-top: 6px;
+        }
+        .detail-actions.hidden { display: none; }
+        .detail-rename-input {
+            flex: 1; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px;
+            font-size: 12px; color: #333; outline: none;
+        }
+        .detail-rename-input:focus { border-color: #2563eb; }
+        .detail-action-btn {
+            padding: 4px 10px; border: 1px solid #ddd; border-radius: 4px;
+            font-size: 11px; cursor: pointer; background: #f9f9f9; color: #555;
+        }
+        .detail-action-btn:hover { background: #eee; }
+        .detail-action-btn.delete { color: #dc2626; border-color: #fca5a5; }
+        .detail-action-btn.delete:hover { background: #fef2f2; }
         .detail-conditions {
             margin-top: 10px; padding-top: 8px; border-top: 1px solid #f0f0f0;
         }
@@ -363,6 +379,11 @@
             <button class="detail-close-btn" onclick="closeDetailPanel()">&times;</button>
         </div>
         <div class="detail-meta" id="detail-meta"></div>
+        <div class="detail-actions hidden" id="detail-actions">
+            <input type="text" class="detail-rename-input" id="detail-rename" placeholder="Location name">
+            <button class="detail-action-btn" id="detail-save-name">Save</button>
+            <button class="detail-action-btn delete" id="detail-delete">Delete</button>
+        </div>
         <div class="detail-conditions" id="detail-conditions"></div>
     </div>
     <div class="detail-charts" id="detail-charts">
@@ -436,7 +457,7 @@
 </div>
 
 <!-- Version label -->
-<div id="version-label">v0.8</div>
+<div id="version-label">v0.9</div>
 
 <!-- Status bar -->
 <div id="status-bar">Ready</div>
@@ -1374,6 +1395,10 @@ function openDetailPanel(station) {
     activeCharts.forEach(c => c.destroy());
     activeCharts = [];
 
+    // Hide forecast actions for station views
+    document.getElementById('detail-actions').classList.add('hidden');
+    activeForecastId = null;
+
     // Set header info
     title.textContent = station.name || 'Unknown Station';
 
@@ -1407,6 +1432,22 @@ function closeDetailPanel() {
 // Close panel with Escape key
 document.addEventListener('keydown', e => {
     if (e.key === 'Escape') closeDetailPanel();
+});
+
+// Forecast rename/delete handlers
+document.getElementById('detail-save-name').addEventListener('click', function() {
+    if (activeForecastId) {
+        renameForecast(activeForecastId, document.getElementById('detail-rename').value.trim());
+    }
+});
+document.getElementById('detail-rename').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+        if (activeForecastId) renameForecast(activeForecastId, this.value.trim());
+        this.blur();
+    }
+});
+document.getElementById('detail-delete').addEventListener('click', function() {
+    if (activeForecastId) deleteForecast(activeForecastId);
 });
 
 // Panel resize drag logic
@@ -2238,32 +2279,89 @@ async function fetchNWSChartData(station) {
 // 7. NOAA POINT FORECAST (right-click / search)
 // ============================================================
 
-let forecastPin = null;
+// ── Saved forecast locations (localStorage) ──
+let savedForecasts = JSON.parse(localStorage.getItem('savedForecasts') || '[]');
+const forecastMarkers = {}; // id -> L.marker
+let activeForecastId = null; // currently open forecast id
 
-// ── Forecast pin icon ──
-const FORECAST_PIN_ICON = L.divIcon({
-    html: '<div style="background:#2563eb;width:14px;height:14px;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.4)"></div>',
-    className: '', iconSize: [14, 14], iconAnchor: [7, 7]
-});
+function makeForecastIcon(name) {
+    const label = name || 'Forecast';
+    return L.divIcon({
+        html: `<div style="display:flex;align-items:center;gap:4px;white-space:nowrap">
+            <div style="background:#2563eb;width:12px;height:12px;border-radius:50%;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.4);flex-shrink:0"></div>
+            <span style="background:rgba(255,255,255,0.9);padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;color:#2563eb;box-shadow:0 1px 4px rgba(0,0,0,0.15)">${label}</span>
+        </div>`,
+        className: '', iconSize: [null, 16], iconAnchor: [6, 8]
+    });
+}
 
-// ── Place or move forecast pin ──
-function placeForecastPin(lat, lng) {
-    if (forecastPin) {
-        forecastPin.setLatLng([lat, lng]);
-    } else {
-        forecastPin = L.marker([lat, lng], { icon: FORECAST_PIN_ICON, draggable: true, zIndexOffset: 5000 }).addTo(map);
-        forecastPin.on('dragend', function() {
-            const pos = forecastPin.getLatLng();
-            loadPointForecast(pos.lat, pos.lng);
-        });
+function saveForecastsToStorage() {
+    localStorage.setItem('savedForecasts', JSON.stringify(savedForecasts));
+}
+
+function createForecastMarker(fc) {
+    const marker = L.marker([fc.lat, fc.lng], {
+        icon: makeForecastIcon(fc.name),
+        draggable: true,
+        zIndexOffset: 5000
+    }).addTo(map);
+
+    marker.on('click', function() {
+        activeForecastId = fc.id;
+        loadPointForecast(fc.lat, fc.lng, fc.id);
+    });
+
+    marker.on('dragend', function() {
+        const pos = marker.getLatLng();
+        fc.lat = pos.lat;
+        fc.lng = pos.lng;
+        saveForecastsToStorage();
+        activeForecastId = fc.id;
+        loadPointForecast(pos.lat, pos.lng, fc.id);
+    });
+
+    forecastMarkers[fc.id] = marker;
+    return marker;
+}
+
+function addNewForecast(lat, lng) {
+    const id = 'fc_' + Date.now();
+    const fc = { id, lat, lng, name: '' };
+    savedForecasts.push(fc);
+    saveForecastsToStorage();
+    createForecastMarker(fc);
+    activeForecastId = id;
+    loadPointForecast(lat, lng, id);
+}
+
+function deleteForecast(id) {
+    const marker = forecastMarkers[id];
+    if (marker) { map.removeLayer(marker); delete forecastMarkers[id]; }
+    savedForecasts = savedForecasts.filter(f => f.id !== id);
+    saveForecastsToStorage();
+    if (activeForecastId === id) {
+        activeForecastId = null;
+        closeDetailPanel();
     }
 }
+
+function renameForecast(id, newName) {
+    const fc = savedForecasts.find(f => f.id === id);
+    if (!fc) return;
+    fc.name = newName;
+    saveForecastsToStorage();
+    const marker = forecastMarkers[id];
+    if (marker) marker.setIcon(makeForecastIcon(newName));
+    document.getElementById('detail-title').textContent = newName || 'Point Forecast';
+}
+
+// Restore saved forecasts on load
+savedForecasts.forEach(fc => createForecastMarker(fc));
 
 // ── Right-click handler (desktop) ──
 map.on('contextmenu', function(e) {
     L.DomEvent.preventDefault(e.originalEvent);
-    placeForecastPin(e.latlng.lat, e.latlng.lng);
-    loadPointForecast(e.latlng.lat, e.latlng.lng);
+    addNewForecast(e.latlng.lat, e.latlng.lng);
 });
 
 // ── Long-press handler (mobile) ──
@@ -2277,8 +2375,7 @@ map.on('contextmenu', function(e) {
         startPos = { x: e.touches[0].clientX, y: e.touches[0].clientY };
         longPressTimer = setTimeout(function() {
             const latlng = map.containerPointToLatLng(L.point(startPos.x, startPos.y));
-            placeForecastPin(latlng.lat, latlng.lng);
-            loadPointForecast(latlng.lat, latlng.lng);
+            addNewForecast(latlng.lat, latlng.lng);
         }, 600);
     }, { passive: true });
 
@@ -2321,8 +2418,7 @@ document.getElementById('forecast-search-input').addEventListener('keydown', asy
         const lat = parseFloat(results[0].lat);
         const lng = parseFloat(results[0].lon);
         map.setView([lat, lng], 12);
-        placeForecastPin(lat, lng);
-        loadPointForecast(lat, lng);
+        addNewForecast(lat, lng);
     } catch (err) {
         console.error('Geocoding error:', err);
         setStatus('Search failed');
@@ -2359,21 +2455,35 @@ function expandGridSeries(values) {
 }
 
 // ── Load point forecast ──
-async function loadPointForecast(lat, lng) {
+async function loadPointForecast(lat, lng, fcId) {
     const panel = document.getElementById('detail-panel');
     const title = document.getElementById('detail-title');
     const meta = document.getElementById('detail-meta');
     const conditions = document.getElementById('detail-conditions');
     const charts = document.getElementById('detail-charts');
+    const actions = document.getElementById('detail-actions');
+    const renameInput = document.getElementById('detail-rename');
 
     map.closePopup();
     activeCharts.forEach(c => c.destroy());
     activeCharts = [];
 
-    title.textContent = 'Point Forecast';
+    const fc = fcId ? savedForecasts.find(f => f.id === fcId) : null;
+    activeForecastId = fcId || null;
+
+    title.textContent = (fc && fc.name) || 'Point Forecast';
     meta.textContent = `${lat.toFixed(4)}°, ${lng.toFixed(4)}°`;
     conditions.innerHTML = '';
     charts.innerHTML = '<div class="detail-loading"><div class="spinner"></div>Loading forecast...</div>';
+
+    // Show rename/delete actions for saved forecasts
+    if (fc) {
+        actions.classList.remove('hidden');
+        renameInput.value = fc.name || '';
+    } else {
+        actions.classList.add('hidden');
+    }
+
     panel.classList.add('open');
 
     try {
@@ -2387,10 +2497,21 @@ async function loadPointForecast(lat, lng) {
         const pointData = await pointResp.json();
         const { gridX, gridY, cwa, relativeLocation } = pointData.properties;
 
-        // Update meta with location name if available
+        // Update meta with location name and auto-name if unnamed
         if (relativeLocation?.properties) {
             const loc = relativeLocation.properties;
-            meta.textContent = `${loc.city || ''}, ${loc.state || ''} · ${lat.toFixed(4)}°, ${lng.toFixed(4)}°`;
+            const locationName = [loc.city, loc.state].filter(Boolean).join(', ');
+            meta.textContent = `${locationName} · ${lat.toFixed(4)}°, ${lng.toFixed(4)}°`;
+
+            // Auto-name the forecast if it has no name yet
+            if (fc && !fc.name && locationName) {
+                fc.name = locationName;
+                saveForecastsToStorage();
+                title.textContent = locationName;
+                renameInput.value = locationName;
+                const marker = forecastMarkers[fc.id];
+                if (marker) marker.setIcon(makeForecastIcon(locationName));
+            }
         }
 
         setStatus('Fetching forecasts...');
