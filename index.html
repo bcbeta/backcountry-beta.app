@@ -1024,8 +1024,8 @@ async function fetchSnotelChartData(station) {
                     const code = s.stationElement?.elementCode;
                     if (!code || !series[code]) return;
                     (s.values || []).forEach(v => {
-                        if (v.value !== null && v.value !== undefined && v.dateTime) {
-                            series[code].push({ time: new Date(v.dateTime), value: v.value });
+                        if (v.value !== null && v.value !== undefined && v.date) {
+                            series[code].push({ time: new Date(v.date), value: v.value });
                         }
                     });
                 });
