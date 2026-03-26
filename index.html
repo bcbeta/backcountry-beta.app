@@ -381,7 +381,6 @@
         <div class="detail-meta" id="detail-meta"></div>
         <div class="detail-actions hidden" id="detail-actions">
             <input type="text" class="detail-rename-input" id="detail-rename" placeholder="Location name">
-            <button class="detail-action-btn" id="detail-save-name">Save</button>
             <button class="detail-action-btn delete" id="detail-delete">Delete</button>
         </div>
         <div class="detail-conditions" id="detail-conditions"></div>
@@ -457,7 +456,7 @@
 </div>
 
 <!-- Version label -->
-<div id="version-label">v0.9.2</div>
+<div id="version-label">v0.9.3</div>
 
 <!-- Status bar -->
 <div id="status-bar">Ready</div>
@@ -1433,8 +1432,15 @@ function openDetailPanel(station) {
 }
 
 function closeDetailPanel() {
+    // Auto-save forecast rename on close
+    if (activeForecastId) {
+        const newName = document.getElementById('detail-rename').value.trim();
+        const fc = savedForecasts.find(f => f.id === activeForecastId);
+        if (fc && newName !== fc.name) {
+            renameForecast(activeForecastId, newName);
+        }
+    }
     document.getElementById('detail-panel').classList.remove('open');
-    // Destroy all active charts
     activeCharts.forEach(c => c.destroy());
     activeCharts = [];
 }
@@ -1445,16 +1451,8 @@ document.addEventListener('keydown', e => {
 });
 
 // Forecast rename/delete handlers
-document.getElementById('detail-save-name').addEventListener('click', function() {
-    if (activeForecastId) {
-        renameForecast(activeForecastId, document.getElementById('detail-rename').value.trim());
-    }
-});
 document.getElementById('detail-rename').addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') {
-        if (activeForecastId) renameForecast(activeForecastId, this.value.trim());
-        this.blur();
-    }
+    if (e.key === 'Enter') this.blur();
 });
 document.getElementById('detail-delete').addEventListener('click', function() {
     if (activeForecastId) deleteForecast(activeForecastId);
@@ -2334,9 +2332,9 @@ function createForecastMarker(fc) {
     return marker;
 }
 
-function addNewForecast(lat, lng) {
+function addNewForecast(lat, lng, name) {
     const id = 'fc_' + Date.now();
-    const fc = { id, lat, lng, name: '' };
+    const fc = { id, lat, lng, name: name || '' };
     savedForecasts.push(fc);
     saveForecastsToStorage();
     createForecastMarker(fc);
@@ -2428,7 +2426,7 @@ document.getElementById('forecast-search-input').addEventListener('keydown', asy
         const lat = parseFloat(results[0].lat);
         const lng = parseFloat(results[0].lon);
         map.setView([lat, lng], 12);
-        addNewForecast(lat, lng);
+        addNewForecast(lat, lng, query);
     } catch (err) {
         console.error('Geocoding error:', err);
         setStatus('Search failed');
