@@ -127,9 +127,22 @@
         }
         .forecast-search input:focus { background: #fff; box-shadow: 0 2px 12px rgba(0,0,0,0.3); }
         .forecast-search::before {
-            content: '\1F50D'; position: absolute; left: 9px; top: 50%; transform: translateY(-50%);
+            content: '\1F50D'; position: absolute; left: 9px; top: 7px;
             font-size: 13px; pointer-events: none;
         }
+        .forecast-suggestions {
+            position: absolute; top: 100%; left: 0; width: 220px;
+            background: #fff; border-radius: 0 0 8px 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.25); max-height: 240px;
+            overflow-y: auto; z-index: 1001;
+        }
+        .forecast-suggestions.hidden { display: none; }
+        .forecast-suggestion {
+            padding: 8px 12px; cursor: pointer; border-top: 1px solid #f0f0f0;
+        }
+        .forecast-suggestion:hover, .forecast-suggestion.active { background: #eef4ff; }
+        .forecast-suggestion .suggestion-name { font-size: 12px; font-weight: 600; color: #222; }
+        .forecast-suggestion .suggestion-detail { font-size: 10px; color: #888; margin-top: 1px; }
 
         /* ── Forecast toast ── */
         .forecast-toast {
@@ -400,7 +413,8 @@
 
 <!-- Forecast location search -->
 <div class="forecast-search" id="forecast-search">
-    <input type="text" id="forecast-search-input" placeholder="Search location for forecast...">
+    <input type="text" id="forecast-search-input" placeholder="Search location for forecast..." autocomplete="off">
+    <div class="forecast-suggestions hidden" id="forecast-suggestions"></div>
 </div>
 
 <!-- Layer toggles -->
@@ -454,7 +468,7 @@
 </div>
 
 <!-- Version label -->
-<div id="version-label">v0.9.4</div>
+<div id="version-label">v0.9.5</div>
 
 <!-- Status bar -->
 <div id="status-bar">Ready</div>
@@ -2412,31 +2426,146 @@ map.on('contextmenu', function(e) {
     }, { passive: true });
 })();
 
-// ── Location search (Nominatim) ──
-document.getElementById('forecast-search-input').addEventListener('keydown', async function(e) {
-    if (e.key !== 'Enter') return;
-    const query = this.value.trim();
-    if (!query) return;
+// ── Location search with autocomplete (Nominatim) ──
+(function() {
+    const searchInput = document.getElementById('forecast-search-input');
+    const suggestionsEl = document.getElementById('forecast-suggestions');
+    let debounceTimer = null;
+    let currentResults = [];
+    let activeIndex = -1;
 
-    try {
-        setStatus('Searching location...');
-        const resp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`, {
-            headers: { 'User-Agent': 'BackcountrySkiReporter/1.0' }
-        });
-        const results = await resp.json();
-        if (results.length === 0) {
-            setStatus('Location not found');
-            return;
-        }
-        const lat = parseFloat(results[0].lat);
-        const lng = parseFloat(results[0].lon);
-        map.setView([lat, lng], 12);
-        addNewForecast(lat, lng, query);
-    } catch (err) {
-        console.error('Geocoding error:', err);
-        setStatus('Search failed');
+    function getSuggestionName(r) {
+        const a = r.address || {};
+        const name = a.peak || a.hamlet || a.village || a.town || a.city || a.suburb || r.display_name.split(',')[0];
+        const region = a.state || a.county || '';
+        return { name, region, short: region ? name + ', ' + region : name };
     }
-});
+
+    function hideSuggestions() {
+        suggestionsEl.classList.add('hidden');
+        suggestionsEl.innerHTML = '';
+        currentResults = [];
+        activeIndex = -1;
+    }
+
+    function showSuggestions(results) {
+        currentResults = results;
+        activeIndex = -1;
+        if (!results.length) { hideSuggestions(); return; }
+        suggestionsEl.innerHTML = results.map((r, i) => {
+            const s = getSuggestionName(r);
+            return `<div class="forecast-suggestion" data-index="${i}">
+                <div class="suggestion-name">${s.name}</div>
+                <div class="suggestion-detail">${s.region}</div>
+            </div>`;
+        }).join('');
+        suggestionsEl.classList.remove('hidden');
+    }
+
+    function selectResult(r) {
+        const lat = parseFloat(r.lat);
+        const lng = parseFloat(r.lon);
+        const s = getSuggestionName(r);
+        searchInput.value = '';
+        hideSuggestions();
+        map.setView([lat, lng], 12);
+        addNewForecast(lat, lng, s.short);
+    }
+
+    function setActive(idx) {
+        const items = suggestionsEl.querySelectorAll('.forecast-suggestion');
+        items.forEach(el => el.classList.remove('active'));
+        if (idx >= 0 && idx < items.length) {
+            activeIndex = idx;
+            items[idx].classList.add('active');
+            items[idx].scrollIntoView({ block: 'nearest' });
+        } else {
+            activeIndex = -1;
+        }
+    }
+
+    // Debounced input — fetch suggestions
+    searchInput.addEventListener('input', function() {
+        clearTimeout(debounceTimer);
+        const query = this.value.trim();
+        if (query.length < 3) { hideSuggestions(); return; }
+
+        debounceTimer = setTimeout(async () => {
+            try {
+                const resp = await fetch(
+                    `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5&addressdetails=1`,
+                    { headers: { 'User-Agent': 'BackcountrySkiReporter/1.0' } }
+                );
+                const results = await resp.json();
+                // Only show if input hasn't changed
+                if (searchInput.value.trim() === query) {
+                    showSuggestions(results);
+                }
+            } catch (err) {
+                console.error('Autocomplete error:', err);
+            }
+        }, 300);
+    });
+
+    // Keyboard navigation
+    searchInput.addEventListener('keydown', function(e) {
+        const visible = !suggestionsEl.classList.contains('hidden') && currentResults.length > 0;
+
+        if (e.key === 'ArrowDown' && visible) {
+            e.preventDefault();
+            setActive(activeIndex < currentResults.length - 1 ? activeIndex + 1 : 0);
+        } else if (e.key === 'ArrowUp' && visible) {
+            e.preventDefault();
+            setActive(activeIndex > 0 ? activeIndex - 1 : currentResults.length - 1);
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if (visible && activeIndex >= 0) {
+                selectResult(currentResults[activeIndex]);
+            } else if (visible && currentResults.length > 0) {
+                selectResult(currentResults[0]);
+            } else {
+                // Fallback: direct search if no dropdown
+                const query = this.value.trim();
+                if (!query) return;
+                (async () => {
+                    try {
+                        setStatus('Searching location...');
+                        const resp = await fetch(
+                            `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`,
+                            { headers: { 'User-Agent': 'BackcountrySkiReporter/1.0' } }
+                        );
+                        const results = await resp.json();
+                        if (!results.length) { setStatus('Location not found'); return; }
+                        const lat = parseFloat(results[0].lat);
+                        const lng = parseFloat(results[0].lon);
+                        searchInput.value = '';
+                        map.setView([lat, lng], 12);
+                        addNewForecast(lat, lng, query);
+                    } catch (err) {
+                        console.error('Geocoding error:', err);
+                        setStatus('Search failed');
+                    }
+                })();
+            }
+        } else if (e.key === 'Escape') {
+            hideSuggestions();
+            searchInput.blur();
+        }
+    });
+
+    // Click on suggestion
+    suggestionsEl.addEventListener('click', function(e) {
+        const row = e.target.closest('.forecast-suggestion');
+        if (!row) return;
+        const idx = parseInt(row.dataset.index);
+        if (currentResults[idx]) selectResult(currentResults[idx]);
+    });
+
+    // Dismiss on click outside
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('#forecast-search')) hideSuggestions();
+    });
+})();
 
 // ── Parse ISO 8601 duration/validTime into hourly time series ──
 function expandGridSeries(values) {
