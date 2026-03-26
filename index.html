@@ -302,7 +302,11 @@
         .detail-header-top {
             display: flex; justify-content: space-between; align-items: flex-start;
         }
-        .detail-header h2 { margin: 0; font-size: 18px; color: #111; flex: 1; }
+        .detail-header h2 { margin: 0; font-size: 18px; color: #111; flex: 1; outline: none; }
+        .detail-header h2.editable { cursor: text; }
+        .detail-header h2.editable:hover::after,
+        .detail-header h2.editable:focus::after { content: ' \270E'; color: #aaa; font-size: 14px; }
+        .detail-header h2.editable:focus { border-bottom: 1px solid #2563eb; }
         .detail-close-btn {
             background: none; border: none; font-size: 24px; cursor: pointer;
             color: #888; padding: 0 0 0 12px; line-height: 1;
@@ -313,11 +317,6 @@
             display: flex; align-items: center; gap: 8px; margin-top: 6px;
         }
         .detail-actions.hidden { display: none; }
-        .detail-rename-input {
-            flex: 1; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px;
-            font-size: 12px; color: #333; outline: none;
-        }
-        .detail-rename-input:focus { border-color: #2563eb; }
         .detail-action-btn {
             padding: 4px 10px; border: 1px solid #ddd; border-radius: 4px;
             font-size: 11px; cursor: pointer; background: #f9f9f9; color: #555;
@@ -380,8 +379,7 @@
         </div>
         <div class="detail-meta" id="detail-meta"></div>
         <div class="detail-actions hidden" id="detail-actions">
-            <input type="text" class="detail-rename-input" id="detail-rename" placeholder="Location name">
-            <button class="detail-action-btn delete" id="detail-delete">Delete</button>
+            <button class="detail-action-btn delete" id="detail-delete">Delete Forecast</button>
         </div>
         <div class="detail-conditions" id="detail-conditions"></div>
     </div>
@@ -456,7 +454,7 @@
 </div>
 
 <!-- Version label -->
-<div id="version-label">v0.9.3</div>
+<div id="version-label">v0.9.4</div>
 
 <!-- Status bar -->
 <div id="status-bar">Ready</div>
@@ -1407,6 +1405,8 @@ function openDetailPanel(station) {
     // Hide forecast actions for station views
     document.getElementById('detail-actions').classList.add('hidden');
     activeForecastId = null;
+    title.contentEditable = 'false';
+    title.classList.remove('editable');
 
     // Set header info
     title.textContent = station.name || 'Unknown Station';
@@ -1433,12 +1433,15 @@ function openDetailPanel(station) {
 
 function closeDetailPanel() {
     // Auto-save forecast rename on close
+    const titleEl = document.getElementById('detail-title');
     if (activeForecastId) {
-        const newName = document.getElementById('detail-rename').value.trim();
+        const newName = titleEl.textContent.trim();
         const fc = savedForecasts.find(f => f.id === activeForecastId);
-        if (fc && newName !== fc.name) {
+        if (fc && newName && newName !== fc.name) {
             renameForecast(activeForecastId, newName);
         }
+        titleEl.contentEditable = 'false';
+        titleEl.classList.remove('editable');
     }
     document.getElementById('detail-panel').classList.remove('open');
     activeCharts.forEach(c => c.destroy());
@@ -1450,10 +1453,12 @@ document.addEventListener('keydown', e => {
     if (e.key === 'Escape') closeDetailPanel();
 });
 
-// Forecast rename/delete handlers
-document.getElementById('detail-rename').addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') this.blur();
+// Forecast title inline-edit: Enter blurs, Escape reverts
+document.getElementById('detail-title').addEventListener('keydown', function(e) {
+    if (!activeForecastId) return;
+    if (e.key === 'Enter') { e.preventDefault(); this.blur(); }
 });
+// Delete forecast handler
 document.getElementById('detail-delete').addEventListener('click', function() {
     if (activeForecastId) deleteForecast(activeForecastId);
 });
@@ -2470,7 +2475,6 @@ async function loadPointForecast(lat, lng, fcId) {
     const conditions = document.getElementById('detail-conditions');
     const charts = document.getElementById('detail-charts');
     const actions = document.getElementById('detail-actions');
-    const renameInput = document.getElementById('detail-rename');
 
     map.closePopup();
     activeCharts.forEach(c => c.destroy());
@@ -2484,11 +2488,14 @@ async function loadPointForecast(lat, lng, fcId) {
     conditions.innerHTML = '';
     charts.innerHTML = '<div class="detail-loading"><div class="spinner"></div>Loading forecast...</div>';
 
-    // Show rename/delete actions for saved forecasts
+    // Make title editable and show delete for saved forecasts
     if (fc) {
+        title.contentEditable = 'true';
+        title.classList.add('editable');
         actions.classList.remove('hidden');
-        renameInput.value = fc.name || '';
     } else {
+        title.contentEditable = 'false';
+        title.classList.remove('editable');
         actions.classList.add('hidden');
     }
 
@@ -2516,7 +2523,6 @@ async function loadPointForecast(lat, lng, fcId) {
                 fc.name = locationName;
                 saveForecastsToStorage();
                 title.textContent = locationName;
-                renameInput.value = locationName;
                 const marker = forecastMarkers[fc.id];
                 if (marker) marker.setIcon(makeForecastIcon(locationName));
             }
